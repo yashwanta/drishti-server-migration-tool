@@ -5,6 +5,7 @@ import { VmCard } from './components/VmCard';
 import { NodeCard } from './components/NodeCard';
 import { PlanWizard } from './components/PlanWizard';
 import { AddConnectionModal } from './components/AddConnectionModal';
+import { MigrationPanel } from './components/MigrationPanel';
 
 interface DropTarget {
   vm: VM;
@@ -216,16 +217,7 @@ export default function App() {
           <h2>Draft Plans ({plans.length})</h2>
           <div className="panel">
             <div className="body">
-              {plans.length === 0 && <div className="empty">No plans yet. Drag a VM onto a Proxmox node.</div>}
-              {plans.map((p) => (
-                <div key={p.id} style={{ padding: '8px 0', borderBottom: '1px solid var(--border)' }}>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</div>
-                  <div className="meta" style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {p.source_vm_id} {'->'} {p.target_node_id} -{' '}
-                    <span className="badge amber">{p.status}</span>
-                  </div>
-                </div>
-              ))}
+              <MigrationPanel plans={plans} onRefresh={() => void load()} />
             </div>
           </div>
         </div>

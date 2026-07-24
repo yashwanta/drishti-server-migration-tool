@@ -10,6 +10,8 @@ import (
 
 	"github.com/drishti/hypershift/internal/api"
 	"github.com/drishti/hypershift/internal/config"
+	"github.com/drishti/hypershift/internal/domain"
+	"github.com/drishti/hypershift/internal/job"
 	"github.com/drishti/hypershift/internal/logging"
 	"github.com/drishti/hypershift/internal/mock"
 	"github.com/drishti/hypershift/internal/server"
@@ -44,8 +46,19 @@ func run() error {
 	audit := api.NewAuditStore()
 	handlers := api.NewHandlers(provider, plans, audit)
 
+	// Wire migration lifecycle: job engine + mock adapter factory.
+	workDir := os.TempDir()
+	factory := api.NewMockFactory()
+	jobState := job.NewState()
+	jobEng := job.NewEngine(jobState, factory, workDir, func(e domain.AuditEvent) {
+		audit.Append(e)
+	})
+	jobEng.SetPlanSaver(func(p domain.Plan) { plans.Put(p) })
+	mh := api.NewMigrationHandlers(handlers, jobEng, factory, workDir)
+
 	srv := server.New(cfg, log)
 	handlers.Register(srv.Router())
+	mh.RegisterMigration(srv.Router())
 
 	return srv.Run(ctx)
 }

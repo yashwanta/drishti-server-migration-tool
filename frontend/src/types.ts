@@ -195,6 +195,40 @@ export interface AuditEvent {
   detail?: string;
 }
 
+export interface PreflightResult {
+  plan_id: string;
+  pass: boolean;
+  checks: PreflightCheck[];
+  blocked?: string[];
+}
+
+export interface ValidationResult {
+  passed: boolean;
+  checks: { name: string; status: string; detail: string }[];
+}
+
+export interface CutoverResult {
+  success: boolean;
+  steps: string[];
+  warning?: string;
+  retention_deadline?: string;
+}
+
+export interface RollbackResult {
+  success: boolean;
+  steps: string[];
+  warning?: string;
+}
+
+export interface Job {
+  ID: string;
+  PlanID: string;
+  state: JobState;
+  steps?: { Name: string; State: JobState; Message: string; StartedAt?: string; FinishedAt?: string }[];
+  StartedAt?: string;
+  FinishedAt?: string;
+}
+
 export interface ApiError {
   error: string;
   code?: string;
