@@ -20,6 +20,7 @@ VMware to Proxmox. Each article is focused and self-contained.
 4. [Safety and Rollback](./04-safety-and-rollback.md) - the invariants that protect production.
 5. [Troubleshooting](./05-troubleshooting.md) - common issues and fixes.
 6. [FAQ](./06-faq.md) - frequently asked questions.
+7. [Migration Lifecycle](./07-migration-lifecycle.md) - the 7-step workflow.
 
 ## Quick reference
 
