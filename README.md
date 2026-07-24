@@ -59,6 +59,43 @@ cd worker
 go run ./cmd/worker
 ```
 
+## Using the application
+
+### Adding connections
+
+The dashboard has two panels with add buttons:
+
+- **Left panel (+ Add Source):** connect VMware vCenter, standalone ESXi, or Hyper-V.
+- **Middle panel (+ Add Target):** connect Proxmox VE.
+
+Click the button, fill in the modal (platform, endpoint, name, secret
+reference), optionally click **Test**, then **Add Connection**. The connection
+appears in its panel and inventory loads automatically. Remove a connection
+with the red **x** on its header.
+
+See [Managing Connections](./docs/knowledge-base/02-managing-connections.md).
+
+### Planning a migration (drag and drop)
+
+1. Drag a powered-off VM from a source panel onto a Proxmox node.
+2. The wizard opens: review source, configure target, map storage and networks,
+   then review.
+3. Click **Create Draft Plan**. A draft appears in the right panel.
+
+**The drag never migrates.** It only creates a draft plan awaiting preflight and
+approval (future phases). See [Migration Planning](./docs/knowledge-base/03-migration-planning.md).
+
+## Knowledge base
+
+Full operator documentation lives in [`docs/knowledge-base/`](./docs/knowledge-base/README.md):
+
+- [Getting Started](./docs/knowledge-base/01-getting-started.md)
+- [Managing Connections](./docs/knowledge-base/02-managing-connections.md)
+- [Drag and Drop Migration Planning](./docs/knowledge-base/03-migration-planning.md)
+- [Safety and Rollback](./docs/knowledge-base/04-safety-and-rollback.md)
+- [Troubleshooting](./docs/knowledge-base/05-troubleshooting.md)
+- [FAQ](./docs/knowledge-base/06-faq.md)
+
 ## Verify everything
 
 Run the full verification script:

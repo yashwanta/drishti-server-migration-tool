@@ -31,3 +31,6 @@ func (h *Handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 func newID() string {
 	return time.Now().UTC().Format("20060102T150405.000000000")
 }
+
+// nowUTC returns the current UTC time.
+func nowUTC() time.Time { return time.Now().UTC() }

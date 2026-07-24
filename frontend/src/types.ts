@@ -1,7 +1,7 @@
 // Types mirroring the Go domain model in backend/internal/domain/models.go.
 // These are the API contracts for the React UI.
 
-export type PlatformKind = 'vmware' | 'proxmox';
+export type PlatformKind = 'vmware' | 'proxmox' | 'hyperv';
 export type ConnRole = 'source' | 'target';
 export type ConnStatus = 'unknown' | 'connected' | 'error';
 export type PowerState = 'on' | 'off' | 'suspended';

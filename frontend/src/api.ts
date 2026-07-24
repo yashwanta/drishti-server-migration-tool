@@ -1,4 +1,4 @@
-import type { ApiError, Connection, InventoryRoot, Plan } from './types';
+import type { ApiError, Connection, InventoryRoot, Plan, PlatformKind, ConnRole } from './types';
 
 const BASE = '/api/v1';
 
@@ -21,24 +21,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export const api = {
-  listConnections: () =>
-    request<{ connections: Connection[] }>('/connections').then((r) => r.connections),
-
-  getConnection: (id: string) => request<Connection>(`/connections/${id}`),
-
-  getInventory: (id: string) => request<InventoryRoot>(`/connections/${id}/inventory`),
-
-  listPlans: () => request<{ plans: Plan[] }>('/plans').then((r) => r.plans),
-
-  createPlan: (input: CreatePlanInput) =>
-    request<Plan>('/plans', { method: 'POST', body: JSON.stringify(input) }),
-
-  getPlan: (id: string) => request<Plan>(`/plans/${id}`),
-
-  deletePlan: (id: string) =>
-    request<void>(`/plans/${id}`, { method: 'DELETE' }),
-};
+export interface CreateConnectionInput {
+  name: string;
+  kind: PlatformKind;
+  role: ConnRole;
+  endpoint: string;
+  insecure_tls: boolean;
+  secret_ref: string;
+}
 
 export interface CreatePlanInput {
   name: string;
@@ -51,3 +41,35 @@ export interface CreatePlanInput {
   memory_mb: number;
   firmware: 'bios' | 'uefi';
 }
+
+export const api = {
+  // --- Connections ---
+  listConnections: () =>
+    request<{ connections: Connection[] }>('/connections').then((r) => r.connections),
+
+  getConnection: (id: string) => request<Connection>(`/connections/${id}`),
+
+  createConnection: (input: CreateConnectionInput) =>
+    request<Connection>('/connections', { method: 'POST', body: JSON.stringify(input) }),
+
+  deleteConnection: (id: string) =>
+    request<void>(`/connections/${id}`, { method: 'DELETE' }),
+
+  testConnection: (id: string) =>
+    request<{ connection_id: string; status: string; message: string }>(
+      `/connections/${id}/test`,
+      { method: 'POST' },
+    ),
+
+  getInventory: (id: string) => request<InventoryRoot>(`/connections/${id}/inventory`),
+
+  // --- Plans ---
+  listPlans: () => request<{ plans: Plan[] }>('/plans').then((r) => r.plans),
+
+  createPlan: (input: CreatePlanInput) =>
+    request<Plan>('/plans', { method: 'POST', body: JSON.stringify(input) }),
+
+  getPlan: (id: string) => request<Plan>(`/plans/${id}`),
+
+  deletePlan: (id: string) => request<void>(`/plans/${id}`, { method: 'DELETE' }),
+};

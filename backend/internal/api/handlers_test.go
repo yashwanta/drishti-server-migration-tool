@@ -50,6 +50,79 @@ func TestListConnections(t *testing.T) {
 	}
 }
 
+func TestCreateConnection(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	body := `{"kind":"vmware","role":"source","endpoint":"vcenter-prod.example.local","name":"vCenter Prod"}`
+	w := do(t, mux, "POST", "/api/v1/connections", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var conn domain.Connection
+	if err := json.Unmarshal(w.Body.Bytes(), &conn); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if conn.ID == "" {
+		t.Error("connection id empty")
+	}
+	if conn.Status != domain.ConnConnected {
+		t.Errorf("status = %q, want connected", conn.Status)
+	}
+}
+
+func TestCreateConnectionRejectsBadKind(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	body := `{"kind":"nutanix","role":"source","endpoint":"x.local"}`
+	w := do(t, mux, "POST", "/api/v1/connections", body)
+	if w.Code != http.StatusConflict && w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 409 or 400", w.Code)
+	}
+}
+
+func TestCreateConnectionRejectsMissingFields(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	w := do(t, mux, "POST", "/api/v1/connections", `{"name":"x"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestCreateConnectionDuplicate(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	body := `{"kind":"vmware","role":"source","endpoint":"vc-prod-2.example.local"}`
+	// First add succeeds.
+	if w := do(t, mux, "POST", "/api/v1/connections", body); w.Code != http.StatusCreated {
+		t.Fatalf("first add should be 201, got %d; %s", w.Code, w.Body.String())
+	}
+	// Second add of the same kind+endpoint must be rejected as a duplicate.
+	if w := do(t, mux, "POST", "/api/v1/connections", body); w.Code != http.StatusConflict {
+		t.Fatalf("duplicate should be 409, got %d; %s", w.Code, w.Body.String())
+	}
+}
+
+func TestDeleteConnection(t *testing.T) {
+	h, mux := newTestHandlers(t)
+	// Add then delete
+	add := do(t, mux, "POST", "/api/v1/connections", `{"kind":"proxmox","role":"target","endpoint":"pve-new.local"}`)
+	var conn domain.Connection
+	_ = json.Unmarshal(add.Body.Bytes(), &conn)
+
+	del := do(t, mux, "DELETE", "/api/v1/connections/"+conn.ID, "")
+	if del.Code != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", del.Code)
+	}
+	if _, ok := h.mock.Connection(conn.ID); ok {
+		t.Error("connection still present after delete")
+	}
+}
+
+func TestTestConnection(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	w := do(t, mux, "POST", "/api/v1/connections/conn-vmware-lab/test", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+}
+
 func TestGetInventory(t *testing.T) {
 	_, mux := newTestHandlers(t)
 	w := do(t, mux, "GET", "/api/v1/connections/conn-vmware-lab/inventory", "")

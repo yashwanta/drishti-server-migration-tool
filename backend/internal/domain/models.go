@@ -11,6 +11,7 @@ type PlatformKind string
 const (
 	PlatformVMware  PlatformKind = "vmware"
 	PlatformProxmox PlatformKind = "proxmox"
+	PlatformHyperV   PlatformKind = "hyperv"
 )
 
 // Role of a connection: source provides VMs to migrate; target receives them.

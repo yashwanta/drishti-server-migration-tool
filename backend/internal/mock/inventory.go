@@ -1,23 +1,36 @@
 // Package mock provides a development-only inventory provider that returns
-// realistic VMware and Proxmox data without contacting any real platform. It is
-// the only provider wired in during Phase 0 and Phase 1.
+// realistic VMware and Proxmox data without contacting any real platform.
+//
+// It implements a mutable connection store so that connections added through
+// the API also produce generated sample inventory, letting the UI be exercised
+// end-to-end without real infrastructure.
 package mock
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/drishti/hypershift/internal/domain"
 )
 
-// Provider returns deterministic sample inventory. It is safe to share.
-type Provider struct{}
+// Provider is a thread-safe, mutable store of platform connections that also
+// generates deterministic sample inventory for each connection.
+type Provider struct {
+	mu          sync.RWMutex
+	connections []domain.Connection
+}
 
-func New() *Provider { return &Provider{} }
+func New() *Provider {
+	p := &Provider{}
+	p.seed()
+	return p
+}
 
-// Connections returns the two default lab connections.
-func (p *Provider) Connections() []domain.Connection {
+// seed populates the two default lab connections.
+func (p *Provider) seed() {
 	now := time.Now().UTC()
-	return []domain.Connection{
+	p.connections = []domain.Connection{
 		{
 			ID: "conn-vmware-lab", Name: "vCenter Lab", Kind: domain.PlatformVMware, Role: domain.RoleSource,
 			Endpoint: "vcenter-lab.example.local", Status: domain.ConnConnected, SecretRef: "vmw/lab-admin",
@@ -31,140 +44,124 @@ func (p *Provider) Connections() []domain.Connection {
 	}
 }
 
-// Inventory returns normalized inventory for the given connection id.
-func (p *Provider) Inventory(connID string) (domain.InventoryRoot, bool) {
-	switch connID {
-	case "conn-vmware-lab":
-		return vmwareInventory(connID), true
-	case "conn-proxmox-lab":
-		return proxmoxInventory(connID), true
+// Connections returns a snapshot of all configured connections.
+func (p *Provider) Connections() []domain.Connection {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]domain.Connection, len(p.connections))
+	copy(out, p.connections)
+	return out
+}
+
+// Connection returns a single connection by id.
+func (p *Provider) Connection(id string) (domain.Connection, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, c := range p.connections {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return domain.Connection{}, false
+}
+
+// Add appends a new connection. It validates the kind/role and returns the
+// stored connection with server-assigned fields filled in.
+func (p *Provider) Add(c domain.Connection) (domain.Connection, error) {
+	switch c.Kind {
+	case domain.PlatformVMware, domain.PlatformProxmox, "hyperv":
 	default:
+		return domain.Connection{}, fmt.Errorf("unsupported platform kind %q (supported: vmware, proxmox, hyperv)", c.Kind)
+	}
+	switch c.Role {
+	case domain.RoleSource, domain.RoleTarget:
+	default:
+		return domain.Connection{}, fmt.Errorf("unsupported role %q (supported: source, target)", c.Role)
+	}
+	if c.Endpoint == "" {
+		return domain.Connection{}, fmt.Errorf("endpoint is required")
+	}
+	if c.Name == "" {
+		c.Name = string(c.Kind) + " " + string(c.Role)
+	}
+	// Derive a stable, readable id from kind + endpoint.
+	id := slugify(string(c.Kind), c.Endpoint)
+	if _, exists := p.Connection(id); exists {
+		return domain.Connection{}, fmt.Errorf("a connection for %s (%s) already exists", c.Endpoint, c.Kind)
+	}
+	now := time.Now().UTC()
+	c.ID = id
+	c.Status = domain.ConnConnected
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = now
+	}
+	if c.UpdatedAt.IsZero() {
+		c.UpdatedAt = now
+	}
+	p.mu.Lock()
+	p.connections = append(p.connections, c)
+	p.mu.Unlock()
+	return c, nil
+}
+
+// Remove deletes a connection by id. Returns false if not found.
+func (p *Provider) Remove(id string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, c := range p.connections {
+		if c.ID == id {
+			p.connections = append(p.connections[:i], p.connections[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+// Inventory returns generated sample inventory for the given connection id.
+func (p *Provider) Inventory(connID string) (domain.InventoryRoot, bool) {
+	c, ok := p.Connection(connID)
+	if !ok {
 		return domain.InventoryRoot{}, false
 	}
+	return generateInventory(c), true
 }
 
-func vmwareInventory(connID string) domain.InventoryRoot {
-	return domain.InventoryRoot{
-		ConnectionID: connID,
-		GeneratedAt:  time.Now().UTC(),
-		Datacenters: []domain.Datacenter{
-			{
-				ID:   "dc-lab",
-				Name: "Lab-DC",
-				Clusters: []domain.Cluster{
-					{
-						ID:   "cluster-lab",
-						Name: "Lab-Cluster",
-						Hosts: []domain.Host{
-							{
-								ID:            "host-esxi-01",
-								Name:          "esxi-01.lab.local",
-								PowerState:    "poweredOn",
-								CPUTotalMHz:   64000,
-								CPUUsedMHz:    18000,
-								MemoryTotalMB: 131072,
-								MemoryUsedMB:  49152,
-								VMs: []domain.VM{
-									webServerVM(),
-									dbServerVM(),
-									unsupportedVM(),
-								},
-							},
-						},
-					},
-				},
-			},
-		},
+// generateInventory produces deterministic sample inventory shaped by the
+// connection kind and role. It does not contact any real platform.
+func generateInventory(c domain.Connection) domain.InventoryRoot {
+	switch c.Kind {
+	case domain.PlatformVMware:
+		return vmwareInventory(c.ID)
+	case domain.PlatformProxmox:
+		return proxmoxInventory(c.ID)
+	case "hyperv":
+		return hypervInventory(c.ID)
+	default:
+		return domain.InventoryRoot{ConnectionID: c.ID, GeneratedAt: time.Now().UTC()}
 	}
 }
 
-func webServerVM() domain.VM {
-	return domain.VM{
-		ID: "vm-web-01", Name: "web-01", HostID: "host-esxi-01",
-		PowerState: domain.PowerOff, CPUs: 2, MemoryMB: 4096,
-		Firmware: domain.FirmwareBIOS, GuestOS: "ubuntu64Guest",
-		GuestFamily: domain.GuestLinux, ToolsStatus: "toolsOk",
-		Disks: []domain.Disk{
-			{ID: "disk-web-0", Label: "Hard disk 1", CapacityBytes: 40 * giga, Format: domain.DiskVMDK, Controller: "lsilogic", Thin: true, DatastoreID: "ds-local-01"},
-		},
-		NICs: []domain.NIC{
-			{ID: "nic-web-0", Label: "Network adapter 1", MACAddress: "00:50:56:a1:00:01", NetworkID: "net-vlan-10", Connected: true, Model: "vmxnet3"},
-		},
-		DatastoreIDs: []string{"ds-local-01"},
-		NetworkIDs:   []string{"net-vlan-10"},
-		Notes:        "Static IP 10.10.10.21 (VLAN 10). Cold migration candidate.",
+// slugify builds a stable connection id from kind and endpoint.
+func slugify(kind, endpoint string) string {
+	endpoint = sanitize(endpoint)
+	if endpoint == "" {
+		return "conn-" + kind
 	}
+	return "conn-" + kind + "-" + endpoint
 }
 
-func dbServerVM() domain.VM {
-	return domain.VM{
-		ID: "vm-db-01", Name: "db-01", HostID: "host-esxi-01",
-		PowerState: domain.PowerOff, CPUs: 4, MemoryMB: 16384,
-		Firmware: domain.FirmwareUEFI, GuestOS: "windows2019srv_64",
-		GuestFamily: domain.GuestWindows, ToolsStatus: "toolsOk",
-		Disks: []domain.Disk{
-			{ID: "disk-db-0", Label: "Hard disk 1", CapacityBytes: 60 * giga, Format: domain.DiskVMDK, Controller: "lsisas", Thin: true, DatastoreID: "ds-local-01"},
-			{ID: "disk-db-1", Label: "Hard disk 2", CapacityBytes: 200 * giga, Format: domain.DiskVMDK, Controller: "lsisas", Thin: true, DatastoreID: "ds-shared-01"},
-		},
-		NICs: []domain.NIC{
-			{ID: "nic-db-0", Label: "Network adapter 1", MACAddress: "00:50:56:a1:00:02", NetworkID: "net-vlan-20", Connected: true, Model: "vmxnet3"},
-		},
-		Snapshots: []domain.Snapshot{
-			{ID: "snap-db-1", Name: "pre-patch-2026-06", Description: "Before June patches", CreatedAt: time.Now().UTC().AddDate(0, -1, 0), Current: true},
-		},
-		DatastoreIDs: []string{"ds-local-01", "ds-shared-01"},
-		NetworkIDs:   []string{"net-vlan-20"},
-		Notes:        "Static IP 10.10.20.31 (VLAN 20). Has snapshot requiring review.",
+// sanitize strips characters that are unsafe for ids and display.
+func sanitize(s string) string {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			out = append(out, byte(r))
+		case r >= 'A' && r <= 'Z':
+			out = append(out, byte(r-'A'+'a'))
+		case r == '.' || r == '-':
+			out = append(out, byte(r))
+		}
 	}
+	return string(out)
 }
-
-func unsupportedVM() domain.VM {
-	return domain.VM{
-		ID: "vm-rdm-01", Name: "legacy-rdm", HostID: "host-esxi-01",
-		PowerState: domain.PowerOn, CPUs: 2, MemoryMB: 8192,
-		Firmware: domain.FirmwareBIOS, GuestOS: "rhel7_64Guest",
-		GuestFamily: domain.GuestLinux, ToolsStatus: "toolsNotRunning",
-		Disks: []domain.Disk{
-			{ID: "disk-rdm-0", Label: "Hard disk 1", CapacityBytes: 500 * giga, Format: domain.DiskRaw, Controller: "pvscsi", Thin: false, DatastoreID: "ds-rdm"},
-		},
-		NICs: []domain.NIC{
-			{ID: "nic-rdm-0", Label: "Network adapter 1", MACAddress: "00:50:56:a1:00:03", NetworkID: "net-vlan-30", Connected: true, Model: "vmxnet3"},
-		},
-		DatastoreIDs: []string{"ds-rdm"},
-		NetworkIDs:   []string{"net-vlan-30"},
-		Notes:        "Uses RDM/shared disk and is powered on. Blocked by preflight.",
-	}
-}
-
-func proxmoxInventory(connID string) domain.InventoryRoot {
-	next := 102
-	return domain.InventoryRoot{
-		ConnectionID: connID,
-		GeneratedAt:  time.Now().UTC(),
-		Nodes: []domain.TargetNode{
-			{
-				ID: "node-pve-01", Name: "pve-01", Online: true,
-				CPUTotalMHz: 64000, CPUUsedMHz: 12000,
-				MemoryTotalMB: 131072, MemoryUsedMB: 40960,
-				VLANAware: true, NextVMID: next,
-				Storage: []domain.TargetStorage{
-					{ID: "local-lvm", Name: "local-lvm", Type: "lvm", ContentTypes: []string{"rootdir", "images"}, CapacityBytes: 400 * giga, FreeBytes: 250 * giga, Shared: false},
-					{ID: "nfs-shared", Name: "nfs-shared", Type: "nfs", ContentTypes: []string{"rootdir", "images", "iso"}, CapacityBytes: 2 * tera, FreeBytes: 1 * tera, Shared: true},
-				},
-				Bridges: []domain.Bridge{
-					{ID: "vmbr0", Name: "vmbr0", VLANAware: true, Ports: []string{"eno1"}},
-					{ID: "vmbr1", Name: "vmbr1", VLANAware: true, Ports: []string{"eno2"}},
-				},
-				VMs: []domain.TargetVM{
-					{ID: 100, Name: "monitor", NodeID: "node-pve-01", Status: domain.PowerOn, CPUs: 2, MemoryMB: 4096},
-					{ID: 101, Name: "bastion", NodeID: "node-pve-01", Status: domain.PowerOff, CPUs: 1, MemoryMB: 2048},
-				},
-			},
-		},
-	}
-}
-
-const (
-	giga = 1024 * 1024 * 1024
-	tera = 1024 * giga
-)
