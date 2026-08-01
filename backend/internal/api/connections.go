@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -13,10 +14,19 @@ type Handlers struct {
 	mock  *mock.Provider
 	plans *PlanStore
 	audit *AuditStore
+	probe ConnectionProbe
+}
+
+type ConnectionProbe interface {
+	Test(context.Context, domain.Connection) (string, error)
 }
 
 func NewHandlers(p *mock.Provider, plans *PlanStore, audit *AuditStore) *Handlers {
 	return &Handlers{mock: p, plans: plans, audit: audit}
+}
+
+func NewHandlersWithProbe(p *mock.Provider, plans *PlanStore, audit *AuditStore, probe ConnectionProbe) *Handlers {
+	return &Handlers{mock: p, plans: plans, audit: audit, probe: probe}
 }
 
 // Register attaches all API routes to the given mux.
@@ -62,8 +72,8 @@ func (h *Handlers) createConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Kind == "" || in.Role == "" || in.Endpoint == "" {
 		writeErr(w, http.StatusBadRequest, errorBody{
-			Error: "kind, role, and endpoint are required",
-			Code:  "bad_request",
+			Error:  "kind, role, and endpoint are required",
+			Code:   "bad_request",
 			Detail: "kind: vmware|proxmox|hyperv, role: source|target, endpoint: host or URL",
 		})
 		return
@@ -133,8 +143,8 @@ func (h *Handlers) getInventory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, inv)
 }
 
-// testConnection performs a read-only connectivity probe. In mock mode it
-// always reports success for a known connection.
+// testConnection performs a read-only connectivity probe. Mock mode clearly
+// reports that no platform was contacted; lab mode uses the configured probe.
 func (h *Handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	c, ok := h.mock.Connection(id)
@@ -142,10 +152,19 @@ func (h *Handlers) testConnection(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "connection not found", Code: "not_found"})
 		return
 	}
+	message := "Mock connectivity probe succeeded. No real platform was contacted."
+	if h.probe != nil {
+		var err error
+		message, err = h.probe.Test(r.Context(), c)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, errorBody{Error: "real connectivity probe failed", Detail: err.Error(), Code: "connection_failed"})
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"connection_id": c.ID,
 		"status":        "connected",
-		"message":       "Mock connectivity probe succeeded. No real platform was contacted.",
+		"message":       message,
 	})
 }
 

@@ -20,16 +20,21 @@ import (
 
 type MigrationHandlers struct {
 	*Handlers
-	jobEng  *job.Engine
-	pre     *preflight.Engine
-	cut     *cutover.Engine
-	factory platform.AdapterFactory
-	workDir string
+	jobEng            *job.Engine
+	pre               *preflight.Engine
+	cut               *cutover.Engine
+	factory           platform.AdapterFactory
+	workDir           string
+	executionDisabled bool
 }
 
 func NewMigrationHandlers(h *Handlers, jobEng *job.Engine, factory platform.AdapterFactory, workDir string) *MigrationHandlers {
 	return &MigrationHandlers{Handlers: h, jobEng: jobEng, pre: preflight.New(), cut: cutover.New(), factory: factory, workDir: workDir}
 }
+
+// DisableExecution prevents a real-mode deployment from invoking the mock job
+// engine. Real execution is enabled only after a production adapter exists.
+func (m *MigrationHandlers) DisableExecution() { m.executionDisabled = true }
 
 func (m *MigrationHandlers) RegisterMigration(mx *http.ServeMux) {
 	mx.HandleFunc("POST /api/v1/plans/{id}/preflight", m.runPreflight)
@@ -52,30 +57,51 @@ type preflightResponse struct {
 
 func (m *MigrationHandlers) resolveSourceTarget(plan domain.Plan) (domain.Connection, domain.Connection, error) {
 	srcConn, ok := m.mock.Connection(plan.SourceConnID)
-	if !ok { return domain.Connection{}, domain.Connection{}, errNotFound("source connection") }
+	if !ok {
+		return domain.Connection{}, domain.Connection{}, errNotFound("source connection")
+	}
 	tgtConn, ok := m.mock.Connection(plan.TargetConnID)
-	if !ok { return domain.Connection{}, domain.Connection{}, errNotFound("target connection") }
+	if !ok {
+		return domain.Connection{}, domain.Connection{}, errNotFound("target connection")
+	}
 	return srcConn, tgtConn, nil
 }
 
 func errNotFound(name string) error { return &notFoundErr{name: name} }
+
 type notFoundErr struct{ name string }
+
 func (e *notFoundErr) Error() string { return e.name + " not found" }
 
 func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	plan, ok := m.plans.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
 	srcConn, tgtConn, err := m.resolveSourceTarget(plan)
-	if err != nil { writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"}); return }
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
+		return
+	}
 	srcAdapter, _ := m.factory.Source(srcConn)
 	tgtAdapter, _ := m.factory.Target(tgtConn)
 	ctx := context.Background()
 	vm, err := srcAdapter.VM(ctx, plan.SourceVMID)
-	if err != nil { writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"}); return }
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
+		return
+	}
 	node, err := tgtAdapter.Node(ctx, plan.TargetNodeID)
-	if err != nil { writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"}); return }
-	if len(plan.StorageMaps) == 0 { plan.StorageMaps = autoStorageMaps(vm, node); m.plans.Put(plan) }
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
+		return
+	}
+	if len(plan.StorageMaps) == 0 {
+		plan.StorageMaps = autoStorageMaps(vm, node)
+		m.plans.Put(plan)
+	}
 	result := m.pre.Run(plan, vm, node)
 	plan.Status = domain.PlanPreflight
 	m.plans.Put(plan)
@@ -83,12 +109,19 @@ func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, preflightResponse{PlanID: plan.ID, Pass: result.Pass, Checks: result.Checks, Blocked: result.Blocked})
 }
 
-func boolStr(b bool) string { if b { return "pass" }; return "blocked" }
+func boolStr(b bool) string {
+	if b {
+		return "pass"
+	}
+	return "blocked"
+}
 
 func autoStorageMaps(vm domain.VM, node domain.TargetNode) []domain.StorageMap {
 	var maps []domain.StorageMap
 	defaultStorage := ""
-	if len(node.Storage) > 0 { defaultStorage = node.Storage[0].ID }
+	if len(node.Storage) > 0 {
+		defaultStorage = node.Storage[0].ID
+	}
 	for _, d := range vm.Disks {
 		maps = append(maps, domain.StorageMap{SourceDiskID: d.ID, TargetStorageID: defaultStorage, TargetFormat: domain.DiskQCOW2})
 	}
@@ -98,7 +131,10 @@ func autoStorageMaps(vm domain.VM, node domain.TargetNode) []domain.StorageMap {
 func (m *MigrationHandlers) approvePlan(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	plan, ok := m.plans.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
 	plan.Status = domain.PlanApproved
 	plan.UpdatedAt = time.Now().UTC()
 	m.plans.Put(plan)
@@ -107,20 +143,43 @@ func (m *MigrationHandlers) approvePlan(w http.ResponseWriter, r *http.Request) 
 }
 
 func (m *MigrationHandlers) executeMigration(w http.ResponseWriter, r *http.Request) {
+	if m.executionDisabled {
+		writeErr(w, http.StatusNotImplemented, errorBody{
+			Error:  "real migration execution is not implemented",
+			Code:   "not_implemented",
+			Detail: "Connection testing is real in lab mode, but inventory, transfer, cutover, and rollback remain disabled.",
+		})
+		return
+	}
 	id := normalizeID(r.PathValue("id"))
 	plan, ok := m.plans.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"}); return }
-	if plan.Status != domain.PlanApproved { writeErr(w, http.StatusConflict, errorBody{Error: "plan must be approved before execution", Code: "conflict"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
+	if plan.Status != domain.PlanApproved {
+		writeErr(w, http.StatusConflict, errorBody{Error: "plan must be approved before execution", Code: "conflict"})
+		return
+	}
 	srcConn, tgtConn, err := m.resolveSourceTarget(plan)
-	if err != nil { writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"}); return }
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
+		return
+	}
 	srcAdapter, _ := m.factory.Source(srcConn)
 	tgtAdapter, _ := m.factory.Target(tgtConn)
 	ctx := context.Background()
 	vm, _ := srcAdapter.VM(ctx, plan.SourceVMID)
 	node, _ := tgtAdapter.Node(ctx, plan.TargetNodeID)
-	if len(plan.StorageMaps) == 0 { plan.StorageMaps = autoStorageMaps(vm, node); m.plans.Put(plan) }
+	if len(plan.StorageMaps) == 0 {
+		plan.StorageMaps = autoStorageMaps(vm, node)
+		m.plans.Put(plan)
+	}
 	j, err := m.jobEng.ExecutePlan(ctx, plan, vm, node, srcConn, tgtConn)
-	if err != nil { writeErr(w, http.StatusInternalServerError, errorBody{Error: err.Error(), Code: "execution_failed"}); return }
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errorBody{Error: err.Error(), Code: "execution_failed"})
+		return
+	}
 	writeJSON(w, http.StatusOK, j)
 }
 
@@ -132,7 +191,10 @@ func (m *MigrationHandlers) listJobs(w http.ResponseWriter, r *http.Request) {
 func (m *MigrationHandlers) getJob(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	j, ok := m.jobEng.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
+		return
+	}
 	writeJSON(w, http.StatusOK, j)
 }
 
@@ -149,9 +211,15 @@ type validationCheckJSON struct {
 func (m *MigrationHandlers) validateJob(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	j, ok := m.jobEng.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
+		return
+	}
 	plan, ok := m.plans.Get(j.PlanID)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
 	srcConn, tgtConn, _ := m.resolveSourceTarget(plan)
 	srcAdapter, _ := m.factory.Source(srcConn)
 	tgtAdapter, _ := m.factory.Target(tgtConn)
@@ -159,12 +227,16 @@ func (m *MigrationHandlers) validateJob(w http.ResponseWriter, r *http.Request) 
 	vm, _ := srcAdapter.VM(ctx, plan.SourceVMID)
 	prof := validation.Default(vm)
 	vmid := 0
-	if plan.TargetVMID != nil { vmid = *plan.TargetVMID }
+	if plan.TargetVMID != nil {
+		vmid = *plan.TargetVMID
+	}
 	state, _ := tgtAdapter.VMState(ctx, vmid)
 	facts := remediation.CollectFacts(vm)
 	result := validation.Run(prof, vm, state, facts)
 	checks := make([]validationCheckJSON, len(result.Checks))
-	for i, c := range result.Checks { checks[i] = validationCheckJSON{Name: c.Name, Status: c.Status, Detail: c.Detail} }
+	for i, c := range result.Checks {
+		checks[i] = validationCheckJSON{Name: c.Name, Status: c.Status, Detail: c.Detail}
+	}
 	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "job.validate", Target: j.ID, Result: boolStr(result.Passed), Detail: "Validation ran."})
 	writeJSON(w, http.StatusOK, validateResponse{Passed: result.Passed, Checks: checks})
 }
@@ -179,9 +251,15 @@ type cutoverResponse struct {
 func (m *MigrationHandlers) cutoverJob(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	j, ok := m.jobEng.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
+		return
+	}
 	plan, ok := m.plans.Get(j.PlanID)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
 	srcConn, tgtConn, _ := m.resolveSourceTarget(plan)
 	srcAdapter, _ := m.factory.Source(srcConn)
 	tgtAdapter, _ := m.factory.Target(tgtConn)
@@ -190,11 +268,16 @@ func (m *MigrationHandlers) cutoverJob(w http.ResponseWriter, r *http.Request) {
 	facts := remediation.CollectFacts(vm)
 	prof := validation.Default(vm)
 	vmid := 0
-	if plan.TargetVMID != nil { vmid = *plan.TargetVMID }
+	if plan.TargetVMID != nil {
+		vmid = *plan.TargetVMID
+	}
 	state, _ := tgtAdapter.VMState(ctx, vmid)
 	valResult := validation.Run(prof, vm, state, facts)
 	res, err := m.cut.Cutover(ctx, srcAdapter, tgtAdapter, plan, vm, facts, valResult, "vmbr0", 10)
-	if err != nil { writeErr(w, http.StatusConflict, errorBody{Error: res.Warning, Code: "cutover_refused"}); return }
+	if err != nil {
+		writeErr(w, http.StatusConflict, errorBody{Error: res.Warning, Code: "cutover_refused"})
+		return
+	}
 	j.State = domain.JobSucceeded
 	fin := time.Now().UTC()
 	j.FinishedAt = &fin
@@ -211,15 +294,24 @@ type rollbackResponse struct {
 func (m *MigrationHandlers) rollbackJob(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	j, ok := m.jobEng.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
+		return
+	}
 	plan, ok := m.plans.Get(j.PlanID)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
 	srcConn, tgtConn, _ := m.resolveSourceTarget(plan)
 	srcAdapter, _ := m.factory.Source(srcConn)
 	tgtAdapter, _ := m.factory.Target(tgtConn)
 	ctx := context.Background()
 	res, err := m.cut.Rollback(ctx, srcAdapter, tgtAdapter, plan)
-	if err != nil { writeErr(w, http.StatusInternalServerError, errorBody{Error: res.Warning, Code: "rollback_failed"}); return }
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errorBody{Error: res.Warning, Code: "rollback_failed"})
+		return
+	}
 	j.State = domain.JobRolledBack
 	fin := time.Now().UTC()
 	j.FinishedAt = &fin
@@ -230,7 +322,10 @@ func (m *MigrationHandlers) rollbackJob(w http.ResponseWriter, r *http.Request) 
 func (m *MigrationHandlers) getReport(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
 	j, ok := m.jobEng.Get(id)
-	if !ok { writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"}); return }
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
+		return
+	}
 	plan, _ := m.plans.Get(j.PlanID)
 	steps := make([]reports.ReportStep, len(j.Steps))
 	for i, s := range j.Steps {
@@ -241,4 +336,8 @@ func (m *MigrationHandlers) getReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func NewMockFactory() platform.AdapterFactory { return mockplatform.NewMockFactory() }
-func ensureWorkDir(dir string) string { d := filepath.Join(dir, "jobs"); _ = os.MkdirAll(d, 0o755); return d }
+func ensureWorkDir(dir string) string {
+	d := filepath.Join(dir, "jobs")
+	_ = os.MkdirAll(d, 0o755)
+	return d
+}

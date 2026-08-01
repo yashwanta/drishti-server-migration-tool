@@ -43,25 +43,27 @@ function Build {
 
 function Down {
     Write-Host "Stopping pod '$PodName'..." -ForegroundColor Cyan
-    podman pod stop $PodName 2>`$null | Out-Null
-    podman pod rm   $PodName --force 2>`$null | Out-Null
+    podman pod stop $PodName 2>$null | Out-Null
+    podman pod rm   $PodName --force 2>$null | Out-Null
     # Remove any orphaned containers
     foreach ($c in @($BackC, $FrontC, $WorkerC)) {
-        podman rm `$c --force 2>`$null | Out-Null
+        podman rm $c --force 2>$null | Out-Null
     }
     Write-Host "Done." -ForegroundColor Green
 }
 
 function Up {
     Write-Host "Creating pod '$PodName' with published ports..." -ForegroundColor Cyan
-    podman pod create --name `$PodName -p 8180:8080 -p 5173:80 -p 8090:8090 2>`$null | Out-Null
+    podman pod create --name $PodName -p 8180:8080 -p 5173:80 -p 8090:8090 2>$null | Out-Null
 
     Write-Host "Starting backend..." -ForegroundColor Cyan
-    podman run -d --pod $PodName --name $BackC `
-        -e DRISHTI_MODE=mock `
-        -e DRISHTI_HTTP_ADDR=:8080 `
-        -e DRISHTI_LOG_LEVEL=info `
-        $BackTag | Out-Null
+    $backendEnv = @("-e", "DRISHTI_MODE=mock")
+    if (Test-Path ".env") {
+        $backendEnv = @("--env-file", ".env")
+        Write-Host "  Loading backend configuration from .env" -ForegroundColor Yellow
+    }
+    podman run -d --pod $PodName --name $BackC @backendEnv `
+        -e DRISHTI_HTTP_ADDR=:8080 -e DRISHTI_LOG_LEVEL=info $BackTag | Out-Null
 
     Write-Host "Starting worker..." -ForegroundColor Cyan
     podman run -d --pod $PodName --name $WorkerC `
