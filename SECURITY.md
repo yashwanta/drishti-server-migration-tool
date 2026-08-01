@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-Report security issues privately to **yashwanta.thakur@martinrea.com**. Do **not** open a public issue for security-sensitive bugs. Acknowledge within 2 business days and target a fix within 30 days.
+Report security issues privately to **yashwanta@lexingtonpcclinic.com**. Do **not** open a public issue for security-sensitive bugs. Acknowledge within 2 business days and target a fix within 30 days.
 
 ## Non-Negotiable Safety Invariants
 
