@@ -12,6 +12,7 @@ import (
 	"github.com/drishti/hypershift/internal/job"
 	"github.com/drishti/hypershift/internal/platform"
 	"github.com/drishti/hypershift/internal/platform/mockplatform"
+	"github.com/drishti/hypershift/internal/platform/proxmox"
 	"github.com/drishti/hypershift/internal/preflight"
 	"github.com/drishti/hypershift/internal/remediation"
 	"github.com/drishti/hypershift/internal/reports"
@@ -26,6 +27,7 @@ type MigrationHandlers struct {
 	factory           platform.AdapterFactory
 	workDir           string
 	executionDisabled bool
+	real              *proxmox.Probe
 }
 
 func NewMigrationHandlers(h *Handlers, jobEng *job.Engine, factory platform.AdapterFactory, workDir string) *MigrationHandlers {
@@ -35,6 +37,13 @@ func NewMigrationHandlers(h *Handlers, jobEng *job.Engine, factory platform.Adap
 // DisableExecution prevents a real-mode deployment from invoking the mock job
 // engine. Real execution is enabled only after a production adapter exists.
 func (m *MigrationHandlers) DisableExecution() { m.executionDisabled = true }
+
+// EnableLabRemoteMigration installs the real Proxmox migration path. Callers
+// must only invoke this after the explicit lab mutation interlock is enabled.
+func (m *MigrationHandlers) EnableLabRemoteMigration(real *proxmox.Probe, enableExecution bool) {
+	m.real = real
+	m.executionDisabled = !enableExecution
+}
 
 func (m *MigrationHandlers) RegisterMigration(mx *http.ServeMux) {
 	mx.HandleFunc("POST /api/v1/plans/{id}/preflight", m.runPreflight)
@@ -83,6 +92,25 @@ func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request)
 	srcConn, tgtConn, err := m.resolveSourceTarget(plan)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
+		return
+	}
+	if m.real != nil {
+		checks, err := m.real.RemotePreflight(r.Context(), plan, srcConn, tgtConn)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, errorBody{Error: "real preflight failed", Detail: err.Error(), Code: "preflight_failed"})
+			return
+		}
+		pass := true
+		blocked := []string{}
+		for _, check := range checks {
+			if check.Status == domain.CheckFail {
+				pass = false
+				blocked = append(blocked, check.Message)
+			}
+		}
+		plan.Status = domain.PlanPreflight
+		m.plans.Put(plan)
+		writeJSON(w, http.StatusOK, preflightResponse{PlanID: plan.ID, Pass: pass, Checks: checks, Blocked: blocked})
 		return
 	}
 	srcAdapter, _ := m.factory.Source(srcConn)
@@ -164,6 +192,29 @@ func (m *MigrationHandlers) executeMigration(w http.ResponseWriter, r *http.Requ
 	srcConn, tgtConn, err := m.resolveSourceTarget(plan)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
+		return
+	}
+	if m.real != nil {
+		result, err := m.real.StartRemoteMigration(r.Context(), proxmox.RemoteMigrationRequest{Plan: plan, Source: srcConn, Target: tgtConn})
+		if err != nil {
+			writeErr(w, http.StatusConflict, errorBody{Error: "remote migration refused", Detail: err.Error(), Code: "migration_refused"})
+			return
+		}
+		plan.TargetVMID = &result.TargetVMID
+		m.plans.Put(plan)
+		j := m.jobEng.StartExternal(plan, result.UPID)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
+			defer cancel()
+			err := m.real.WaitRemoteMigration(ctx, srcConn, result, func(progress proxmox.RemoteMigrationProgress) {
+				m.jobEng.UpdateExternal(j.ID, progress.Message)
+			})
+			if err == nil {
+				err = m.real.VerifyRemoteMigration(ctx, srcConn, tgtConn, result)
+			}
+			m.jobEng.FinishExternal(j.ID, err)
+		}()
+		writeJSON(w, http.StatusAccepted, j)
 		return
 	}
 	srcAdapter, _ := m.factory.Source(srcConn)

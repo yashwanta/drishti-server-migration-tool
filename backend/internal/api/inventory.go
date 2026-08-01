@@ -46,15 +46,18 @@ func (h *Handlers) listPlans(w http.ResponseWriter, r *http.Request) {
 // createPlanInput is the body accepted when a drop opens a plan. It intentionally
 // omits execution fields; status is always forced to "draft".
 type createPlanInput struct {
-	Name         string `json:"name"`
-	SourceVMID   string `json:"source_vm_id"`
-	SourceConnID string `json:"source_connection_id"`
-	TargetNodeID string `json:"target_node_id"`
-	TargetConnID string `json:"target_connection_id"`
-	TargetVMName string `json:"target_vm_name"`
-	CPU          int    `json:"cpu"`
-	MemoryMB     int64  `json:"memory_mb"`
-	Firmware     string `json:"firmware"`
+	Name         string              `json:"name"`
+	SourceVMID   string              `json:"source_vm_id"`
+	SourceConnID string              `json:"source_connection_id"`
+	TargetNodeID string              `json:"target_node_id"`
+	TargetConnID string              `json:"target_connection_id"`
+	TargetVMName string              `json:"target_vm_name"`
+	CPU          int                 `json:"cpu"`
+	MemoryMB     int64               `json:"memory_mb"`
+	Firmware     string              `json:"firmware"`
+	DiskFormat   string              `json:"disk_format"`
+	StorageMaps  []domain.StorageMap `json:"storage_maps"`
+	NetworkMaps  []domain.NetworkMap `json:"network_maps"`
 }
 
 // createPlan is what a drop calls. It NEVER starts a migration; the created
@@ -93,11 +96,28 @@ func (h *Handlers) createPlan(w http.ResponseWriter, r *http.Request) {
 		CPU:          in.CPU,
 		MemoryMB:     in.MemoryMB,
 		Firmware:     fw,
-		DiskFormat:   domain.DiskQCOW2,
+		StorageMaps:  in.StorageMaps,
+		NetworkMaps:  in.NetworkMaps,
+		DiskFormat:   domain.DiskFormat(in.DiskFormat),
 		Status:       domain.PlanDraft,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 		CreatedBy:    "operator",
+	}
+	if pl.DiskFormat != domain.DiskRaw && pl.DiskFormat != domain.DiskQCOW2 {
+		pl.DiskFormat = domain.DiskRaw
+	}
+	for _, sm := range pl.StorageMaps {
+		if sm.SourceDiskID == "" || sm.TargetStorageID == "" {
+			writeErr(w, http.StatusBadRequest, errorBody{Error: "every storage mapping requires source_disk_id and target_storage_id", Code: "bad_request"})
+			return
+		}
+	}
+	for _, nm := range pl.NetworkMaps {
+		if nm.SourceNICID == "" || nm.TargetBridge == "" {
+			writeErr(w, http.StatusBadRequest, errorBody{Error: "every network mapping requires source_nic_id and target_bridge", Code: "bad_request"})
+			return
+		}
 	}
 	h.plans.Put(pl)
 	h.audit.Append(domain.AuditEvent{

@@ -221,12 +221,12 @@ export interface RollbackResult {
 }
 
 export interface Job {
-  ID: string;
-  PlanID: string;
+  id: string;
+  plan_id: string;
   state: JobState;
-  steps?: { Name: string; State: JobState; Message: string; StartedAt?: string; FinishedAt?: string }[];
-  StartedAt?: string;
-  FinishedAt?: string;
+  steps: { id?: string; name: string; state: JobState; message?: string; started_at?: string; finished_at?: string }[];
+  started_at?: string;
+  finished_at?: string;
 }
 
 export interface ApiError {

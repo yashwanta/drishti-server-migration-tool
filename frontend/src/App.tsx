@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Connection, InventoryRoot, Plan, TargetNode, VM, ConnRole } from './types';
+import type { Connection, InventoryRoot, Job, Plan, TargetNode, VM, ConnRole } from './types';
 import { api } from './api';
 import { VmCard } from './components/VmCard';
 import { NodeCard } from './components/NodeCard';
@@ -21,7 +21,10 @@ function arr<T>(v: T[] | null | undefined): T[] {
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [inventory, setInventory] = useState<Record<string, InventoryRoot>>({});
+  const [inventoryErrors, setInventoryErrors] = useState<Record<string, string>>({});
+  const [mode, setMode] = useState('unknown');
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [addModal, setAddModal] = useState<ConnRole | null>(null);
@@ -35,17 +38,26 @@ export default function App() {
       const conns = await api.listConnections();
       setConnections(conns);
       const inv: Record<string, InventoryRoot> = {};
+      const invErrors: Record<string, string> = {};
       await Promise.all(
         conns.map(async (c) => {
           try {
             inv[c.id] = await api.getInventory(c.id);
-          } catch {
-            // leave missing inventory empty
+          } catch (e) {
+            invErrors[c.id] = e instanceof Error ? e.message : String(e);
           }
         }),
       );
       setInventory(inv);
+      setInventoryErrors(invErrors);
       setPlans(await api.listPlans());
+      setJobs(await api.listJobs());
+      try {
+        const health = await api.health();
+        setMode(health.mode);
+      } catch {
+        setMode('unknown');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -56,6 +68,13 @@ export default function App() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void api.listJobs().then(setJobs).catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const sources = connections.filter((c) => c.role === 'source');
   const targets = connections.filter((c) => c.role === 'target');
@@ -95,7 +114,7 @@ export default function App() {
     <div className="app">
       <div className="topbar">
         <h1>DRISHTI HyperShift</h1>
-        <span className="mode">MOCK MODE</span>
+        <span className="mode">{mode.toUpperCase()} MODE</span>
         <span style={{ flex: 1 }} />
         <button className="btn" onClick={() => void load()} disabled={loading}>
           {loading ? <span className="spinner" /> : 'Refresh'}
@@ -140,12 +159,12 @@ export default function App() {
                       {conn.kind} - {conn.endpoint}
                     </div>
                   )}
-                  {inv?.datacenters?.map((dc) =>
-                    dc.clusters.flatMap((cl) =>
-                      cl.hosts.flatMap((h) => (
+                  {arr(inv?.datacenters).map((dc) =>
+                    arr(dc.clusters).flatMap((cl) =>
+                      arr(cl.hosts).flatMap((h) => (
                         <div key={h.id} style={{ marginBottom: 12 }}>
                           <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>{h.name}</div>
-                          {h.vms.map((vm) => (
+                          {arr(h.vms).map((vm) => (
                             <VmCard
                               key={vm.id}
                               vm={vm}
@@ -159,7 +178,8 @@ export default function App() {
                     ),
                   )}
                   {inv && arr(inv.datacenters).length === 0 && <div className="empty">No VMs in this inventory.</div>}
-                  {!inv && <div className="empty">Loading inventory...</div>}
+                  {inventoryErrors[conn.id] && <div className="error-text">{inventoryErrors[conn.id]}</div>}
+                  {!inv && !inventoryErrors[conn.id] && <div className="empty">Loading inventory...</div>}
                 </div>
               </div>
             );
@@ -198,11 +218,12 @@ export default function App() {
                       {conn.kind} - {conn.endpoint}
                     </div>
                   )}
-                  {inv?.nodes?.map((node) => (
+                  {arr(inv?.nodes).map((node) => (
                     <NodeCard key={node.id} node={node} onDrop={(n) => handleDrop(n, conn.id)} />
                   ))}
                   {inv && arr(inv.nodes).length === 0 && <div className="empty">No nodes in this inventory.</div>}
-                  {!inv && <div className="empty">Loading inventory...</div>}
+                  {inventoryErrors[conn.id] && <div className="error-text">{inventoryErrors[conn.id]}</div>}
+                  {!inv && !inventoryErrors[conn.id] && <div className="empty">Loading inventory...</div>}
                 </div>
               </div>
             );
@@ -214,10 +235,46 @@ export default function App() {
 
         {/* PLANS PANEL */}
         <div className="col">
-          <h2>Draft Plans ({plans.length})</h2>
+          <h2>Migration Plans ({plans.length})</h2>
           <div className="panel">
             <div className="body">
               <MigrationPanel plans={plans} onRefresh={() => void load()} />
+            </div>
+          </div>
+          <h2 style={{ marginTop: 14 }}>Activity ({jobs.length})</h2>
+          <div className="panel">
+            <div className="body activity-list">
+              {jobs.map((job) => {
+                const plan = plans.find((item) => item.id === job.plan_id);
+                const message = job.steps[0]?.message ?? '';
+                const match = message.match(/([0-9]+(?:\.[0-9]+)?)%/);
+                const progress = match ? Math.min(100, Math.max(0, Number(match[1]))) : null;
+                return (
+                  <div className="activity-item" key={job.id}>
+                    <div className="activity-head">
+                      <span>{plan?.name ?? job.plan_id}</span>
+                      <span className={`badge ${job.state === 'succeeded' ? 'green' : job.state === 'failed' ? 'red' : 'amber'}`}>{job.state}</span>
+                    </div>
+                    <div className="meta">{plan?.source_vm_id ?? 'migration'} → VMID {plan?.target_vmid ?? 'pending'} on {plan?.target_node_id ?? 'target'}</div>
+                    {job.state === 'running' && progress !== null && (
+                      <div className="progress-wrap" aria-label={`Migration ${progress.toFixed(1)} percent complete`}>
+                        <div className="progress-bar"><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
+                        <span>{progress.toFixed(1)}%</span>
+                      </div>
+                    )}
+                    {job.steps.map((step, index) => (
+                      <div className="activity-step" key={step.id ?? `${job.id}-${index}`}>
+                        {step.name}: {step.state}{step.message ? ` — ${step.message}` : ''}
+                      </div>
+                    ))}
+                    <div className="meta">
+                      {job.started_at ? new Date(job.started_at).toLocaleString() : ''}
+                      {job.finished_at ? ` – ${new Date(job.finished_at).toLocaleString()}` : ''}
+                    </div>
+                  </div>
+                );
+              })}
+              {jobs.length === 0 && <div className="empty">No migration activity yet.</div>}
             </div>
           </div>
         </div>

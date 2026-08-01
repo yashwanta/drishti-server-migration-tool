@@ -28,6 +28,10 @@ type Config struct {
 
 	// LogLevel controls structured log verbosity.
 	LogLevel string
+
+	// EnableLabMigration unlocks real mutating migration calls in lab mode.
+	// It is ignored in mock and production modes.
+	EnableLabMigration bool
 }
 
 // RunMode names a deployment safety tier.
@@ -58,13 +62,14 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr:     addr,
-		ReadTimeout:  durationEnv("DRISHTI_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout: durationEnv("DRISHTI_WRITE_TIMEOUT", 30*time.Second),
-		ShutdownTime: durationEnv("DRISHTI_SHUTDOWN_TIMEOUT", 10*time.Second),
-		Mode:         mode,
-		DBURL:        strings.TrimSpace(os.Getenv("DRISHTI_DB_URL")),
-		LogLevel:     strings.ToLower(strings.TrimSpace(os.Getenv("DRISHTI_LOG_LEVEL"))),
+		HTTPAddr:           addr,
+		ReadTimeout:        durationEnv("DRISHTI_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:       durationEnv("DRISHTI_WRITE_TIMEOUT", 30*time.Second),
+		ShutdownTime:       durationEnv("DRISHTI_SHUTDOWN_TIMEOUT", 10*time.Second),
+		Mode:               mode,
+		DBURL:              strings.TrimSpace(os.Getenv("DRISHTI_DB_URL")),
+		LogLevel:           strings.ToLower(strings.TrimSpace(os.Getenv("DRISHTI_LOG_LEVEL"))),
+		EnableLabMigration: strings.EqualFold(strings.TrimSpace(os.Getenv("DRISHTI_ENABLE_LAB_MIGRATION")), "true"),
 	}
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Plan, TargetNode, VM, Firmware, DiskFormat } from '../types';
+import type { Plan, TargetNode, VM, Firmware } from '../types';
 import { api } from '../api';
 
 interface Props {
@@ -20,7 +20,7 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
   const [memory, setMemory] = useState(vm.memory_mb);
   const [firmware, setFirmware] = useState<Firmware>(vm.firmware);
   const [targetName, setTargetName] = useState(vm.name);
-  const [diskFormat, setDiskFormat] = useState<DiskFormat>('qcow2');
+  const [diskFormat, setDiskFormat] = useState<'raw' | 'qcow2'>('qcow2');
   const [storageMaps, setStorageMaps] = useState<Record<string, string>>(
     Object.fromEntries(vm.disks.map((d) => [d.id, node.storage[0]?.id ?? ''])),
   );
@@ -48,6 +48,17 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
         cpu,
         memory_mb: memory,
         firmware,
+        disk_format: diskFormat,
+        storage_maps: vm.disks.map((d) => ({
+          source_disk_id: d.id,
+          target_storage_id: storageMaps[d.id] ?? '',
+          target_format: diskFormat,
+        })),
+        network_maps: vm.nics.map((n) => ({
+          source_nic_id: n.id,
+          target_bridge: networkMaps[n.id] ?? '',
+          vlan_id: vlanId || undefined,
+        })),
       });
       onCreated(plan);
     } catch (e) {
@@ -121,7 +132,7 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
               ))}
               <div className="field">
   <label>Target Disk Format</label>
-  <select value={diskFormat} onChange={(e) => setDiskFormat(e.target.value as DiskFormat)}>
+  <select value={diskFormat} onChange={(e) => setDiskFormat(e.target.value as 'raw' | 'qcow2')}>
     <option value="qcow2">qcow2</option>
     <option value="raw">raw</option>
   </select>
@@ -155,7 +166,7 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
               <div className="summary-row"><span>Network Maps</span><span className="val">{vm.nics.length}</span></div>
               <div className="warn-box">
                 Submitting creates a DRAFT plan only. No migration, disk copy, power change, or deletion
-                will occur. The source VM remains registered in VMware for rollback.
+                will occur. The source VM remains registered on its source platform for rollback.
               </div>
             </div>
           )}

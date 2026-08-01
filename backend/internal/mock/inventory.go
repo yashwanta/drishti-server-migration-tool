@@ -27,6 +27,10 @@ func New() *Provider {
 	return p
 }
 
+// NewEmpty creates a connection registry without development fixtures. Real
+// lab and production modes must never display synthetic platform connections.
+func NewEmpty() *Provider { return &Provider{} }
+
 // seed populates the two default lab connections.
 func (p *Provider) seed() {
 	now := time.Now().UTC()

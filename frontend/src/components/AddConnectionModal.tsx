@@ -61,17 +61,25 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
     setTesting(true);
     setError('');
     setTestMsg('');
+    let tempConnectionId: string | null = null;
     try {
       // Create then test, then remove if the user hasn't saved yet. For mock
       // mode this always succeeds. In production a real probe runs here.
       const conn = await api.createConnection(buildInput());
+      tempConnectionId = conn.id;
       const res = await api.testConnection(conn.id);
       setTestMsg(`${res.status.toUpperCase()}: ${res.message}`);
-      // Remove the temp connection so the user can adjust and save cleanly.
-      await api.deleteConnection(conn.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      // Always remove the temporary record, including when the probe fails.
+      if (tempConnectionId) {
+        try {
+          await api.deleteConnection(tempConnectionId);
+        } catch {
+          // Preserve the probe result; a stale temp record can be removed from the dashboard.
+        }
+      }
       setTesting(false);
     }
   };

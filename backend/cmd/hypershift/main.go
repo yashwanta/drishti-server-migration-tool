@@ -43,6 +43,9 @@ func run() error {
 	defer stop()
 
 	provider := mock.New()
+	if cfg.Mode != config.ModeMock {
+		provider = mock.NewEmpty()
+	}
 	plans := api.NewPlanStore()
 	audit := api.NewAuditStore()
 	handlers := api.NewHandlers(provider, plans, audit)
@@ -61,6 +64,9 @@ func run() error {
 	mh := api.NewMigrationHandlers(handlers, jobEng, factory, workDir)
 	if cfg.Mode != config.ModeMock {
 		mh.DisableExecution()
+	}
+	if cfg.Mode == config.ModeLab {
+		mh.EnableLabRemoteMigration(proxmox.NewProbe(), cfg.EnableLabMigration)
 	}
 
 	srv := server.New(cfg, log)

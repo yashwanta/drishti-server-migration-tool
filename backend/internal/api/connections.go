@@ -19,6 +19,7 @@ type Handlers struct {
 
 type ConnectionProbe interface {
 	Test(context.Context, domain.Connection) (string, error)
+	Inventory(context.Context, domain.Connection) (domain.InventoryRoot, error)
 }
 
 func NewHandlers(p *mock.Provider, plans *PlanStore, audit *AuditStore) *Handlers {
@@ -135,6 +136,20 @@ func (h *Handlers) deleteConnection(w http.ResponseWriter, r *http.Request) {
 // getInventory returns normalized inventory for a connection.
 func (h *Handlers) getInventory(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
+	if h.probe != nil {
+		conn, exists := h.mock.Connection(id)
+		if !exists {
+			writeErr(w, http.StatusNotFound, errorBody{Error: "connection not found", Code: "not_found"})
+			return
+		}
+		inv, err := h.probe.Inventory(r.Context(), conn)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, errorBody{Error: "real inventory request failed", Detail: err.Error(), Code: "inventory_failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, inv)
+		return
+	}
 	inv, ok := h.mock.Inventory(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "connection not found", Code: "not_found"})

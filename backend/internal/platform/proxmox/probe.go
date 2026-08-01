@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 )
 
 var secretKeyRE = regexp.MustCompile(`[^A-Z0-9]+`)
+var apiTokenRE = regexp.MustCompile(`PVEAPIToken=[^,\s\"']+`)
 
 // Probe performs an authenticated, read-only request to the PVE version API.
 // Credentials are resolved from environment variables derived from SecretRef.
@@ -28,44 +30,91 @@ func (p *Probe) Test(ctx context.Context, conn domain.Connection) (string, error
 	if conn.Kind != domain.PlatformProxmox {
 		return "", fmt.Errorf("real connectivity is not implemented for platform %q", conn.Kind)
 	}
-	endpoint, err := normalizeEndpoint(conn.Endpoint)
+	client, err := newAPIClient(conn)
 	if err != nil {
 		return "", err
+	}
+	var body struct {
+		Version string `json:"version"`
+		Release string `json:"release"`
+	}
+	if err := client.get(ctx, "/api2/json/version", &body); err != nil {
+		return "", err
+	}
+	if body.Version == "" {
+		return "", fmt.Errorf("Proxmox API response did not include a version")
+	}
+	return fmt.Sprintf("Authenticated to Proxmox VE %s (release %s).", body.Version, body.Release), nil
+}
+
+type apiClient struct {
+	baseURL string
+	auth    string
+	http    *http.Client
+}
+
+func newAPIClient(conn domain.Connection) (*apiClient, error) {
+	endpoint, err := normalizeEndpoint(conn.Endpoint)
+	if err != nil {
+		return nil, err
 	}
 	tokenID, tokenSecret, err := credentials(conn.SecretRef)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: conn.InsecureTLS} // #nosec G402 -- explicit lab-only setting
-	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/api2/json/version", nil)
-	if err != nil {
-		return "", fmt.Errorf("build Proxmox request: %w", err)
+	return &apiClient{
+		baseURL: endpoint,
+		auth:    "PVEAPIToken=" + tokenID + "=" + tokenSecret,
+		http:    &http.Client{Transport: transport, Timeout: 15 * time.Second},
+	}, nil
+}
+
+func (c *apiClient) get(ctx context.Context, path string, out any) error {
+	return c.do(ctx, http.MethodGet, path, nil, out)
+}
+
+func (c *apiClient) postForm(ctx context.Context, path string, values url.Values, out any) error {
+	return c.do(ctx, http.MethodPost, path, strings.NewReader(values.Encode()), out)
+}
+
+func (c *apiClient) do(ctx context.Context, method, path string, body *strings.Reader, out any) error {
+	var requestBody io.Reader
+	if body != nil {
+		requestBody = body
 	}
-	req.Header.Set("Authorization", "PVEAPIToken="+tokenID+"="+tokenSecret)
-	resp, err := client.Do(req)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, requestBody)
 	if err != nil {
-		return "", fmt.Errorf("connect to Proxmox endpoint: %w", err)
+		return fmt.Errorf("build Proxmox request: %w", err)
+	}
+	req.Header.Set("Authorization", c.auth)
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("connect to Proxmox endpoint: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Proxmox API returned HTTP %d", resp.StatusCode)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		detail := strings.TrimSpace(apiTokenRE.ReplaceAllString(string(message), "PVEAPIToken=[REDACTED]"))
+		if detail == "" {
+			return fmt.Errorf("Proxmox API %s returned HTTP %d", path, resp.StatusCode)
+		}
+		return fmt.Errorf("Proxmox API %s returned HTTP %d: %s", path, resp.StatusCode, detail)
 	}
-	var body struct {
-		Data struct {
-			Version string `json:"version"`
-			Release string `json:"release"`
-		} `json:"data"`
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return "", fmt.Errorf("decode Proxmox response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return fmt.Errorf("decode Proxmox response: %w", err)
 	}
-	if body.Data.Version == "" {
-		return "", fmt.Errorf("Proxmox API response did not include a version")
+	if err := json.Unmarshal(envelope.Data, out); err != nil {
+		return fmt.Errorf("decode Proxmox data for %s: %w", path, err)
 	}
-	return fmt.Sprintf("Authenticated to Proxmox VE %s (release %s).", body.Data.Version, body.Data.Release), nil
+	return nil
 }
 
 func normalizeEndpoint(raw string) (string, error) {
