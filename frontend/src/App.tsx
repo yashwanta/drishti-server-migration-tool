@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Connection, InventoryRoot, Job, Plan, TargetNode, VM, ConnRole } from './types';
+import type { Connection, InventoryRoot, Job, Plan, TargetNode, VM, ConnRole, PlatformKind } from './types';
 import { api } from './api';
 import { VmCard } from './components/VmCard';
 import { NodeCard } from './components/NodeCard';
@@ -12,6 +12,7 @@ interface DropTarget {
   node: TargetNode;
   sourceConnId: string;
   targetConnId: string;
+  sourceKind: PlatformKind;
 }
 
 function arr<T>(v: T[] | null | undefined): T[] {
@@ -91,7 +92,7 @@ export default function App() {
           const sourceConn = sources.find((c) => c.id === inv.connection_id);
           const targetConn = connections.find((c) => c.id === targetConnId);
           if (sourceConn && targetConn) {
-            setDropTarget({ vm, node, sourceConnId: sourceConn.id, targetConnId: targetConn.id });
+            setDropTarget({ vm, node, sourceConnId: sourceConn.id, targetConnId: targetConn.id, sourceKind: sourceConn.kind });
           }
           return;
         }
@@ -113,7 +114,7 @@ export default function App() {
   return (
     <div className="app">
       <div className="topbar">
-        <h1>DRISHTI HyperShift</h1>
+        <img className="brand-logo" src="/drishti-hypershift-logo-v3.png" alt="DRISHTI HyperShift" />
         <span className="mode">{mode.toUpperCase()} MODE</span>
         <span style={{ flex: 1 }} />
         <button className="btn" onClick={() => void load()} disabled={loading}>
@@ -286,6 +287,8 @@ export default function App() {
           node={dropTarget.node}
           sourceConnId={dropTarget.sourceConnId}
           targetConnId={dropTarget.targetConnId}
+          sourceKind={dropTarget.sourceKind}
+          labMode={mode === 'lab'}
           onClose={() => setDropTarget(null)}
           onCreated={(plan) => {
             setPlans((prev) => [plan, ...prev]);

@@ -109,6 +109,7 @@ func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request)
 			}
 		}
 		plan.Status = domain.PlanPreflight
+		plan.PreflightPassed = pass
 		m.plans.Put(plan)
 		writeJSON(w, http.StatusOK, preflightResponse{PlanID: plan.ID, Pass: pass, Checks: checks, Blocked: blocked})
 		return
@@ -132,6 +133,7 @@ func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request)
 	}
 	result := m.pre.Run(plan, vm, node)
 	plan.Status = domain.PlanPreflight
+	plan.PreflightPassed = result.Pass
 	m.plans.Put(plan)
 	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "plan.preflight", Target: plan.ID, Result: boolStr(result.Pass), Detail: "Preflight checks ran."})
 	writeJSON(w, http.StatusOK, preflightResponse{PlanID: plan.ID, Pass: result.Pass, Checks: result.Checks, Blocked: result.Blocked})
@@ -161,6 +163,10 @@ func (m *MigrationHandlers) approvePlan(w http.ResponseWriter, r *http.Request) 
 	plan, ok := m.plans.Get(id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
+	if plan.Status != domain.PlanPreflight || !plan.PreflightPassed {
+		writeErr(w, http.StatusConflict, errorBody{Error: "plan requires a passing preflight before approval", Code: "preflight_required"})
 		return
 	}
 	plan.Status = domain.PlanApproved

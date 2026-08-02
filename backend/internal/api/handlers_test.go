@@ -164,6 +164,47 @@ func TestCreatePlanAlwaysDraft(t *testing.T) {
 	if pl.ID == "" {
 		t.Error("plan id empty")
 	}
+	if pl.Strategy != domain.MigrationStrategyCold {
+		t.Errorf("strategy = %q, want cold default", pl.Strategy)
+	}
+}
+
+func TestCreatePlanAcceptsPVELiveStrategy(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	body := `{"source_vm_id":"vm-web-01","source_connection_id":"conn-vmware-lab","target_node_id":"node-pve-01","target_connection_id":"conn-proxmox-lab","strategy":"pve-live"}`
+	w := do(t, mux, "POST", "/api/v1/plans", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var pl domain.Plan
+	if err := json.Unmarshal(w.Body.Bytes(), &pl); err != nil {
+		t.Fatal(err)
+	}
+	if pl.Strategy != domain.MigrationStrategyPVELive {
+		t.Fatalf("strategy = %q", pl.Strategy)
+	}
+}
+
+func TestCreatePlanRejectsUnimplementedWarmStrategy(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	body := `{"source_vm_id":"vm-web-01","source_connection_id":"conn-vmware-lab","target_node_id":"node-pve-01","target_connection_id":"conn-proxmox-lab","strategy":"warm"}`
+	w := do(t, mux, "POST", "/api/v1/plans", body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestApproveRequiresPassingPreflight(t *testing.T) {
+	h, mux := newTestHandlers(t)
+	NewMigrationHandlers(h, nil, nil, "").RegisterMigration(mux)
+	body := `{"source_vm_id":"vm-web-01","source_connection_id":"conn-vmware-lab","target_node_id":"node-pve-01","target_connection_id":"conn-proxmox-lab"}`
+	w := do(t, mux, "POST", "/api/v1/plans", body)
+	var pl domain.Plan
+	_ = json.Unmarshal(w.Body.Bytes(), &pl)
+	w = do(t, mux, "POST", "/api/v1/plans/"+pl.ID+"/approve", "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
 }
 
 func TestPlanLifecycleGetDelete(t *testing.T) {

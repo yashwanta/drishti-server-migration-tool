@@ -28,18 +28,36 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 20px;
+  padding: 8px 20px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
 
 .topbar h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+.brand-logo {
+  display: block;
+  width: 300px;
+  height: 72px;
+  object-fit: contain;
+  object-position: left center;
+  background: var(--panel);
+  mix-blend-mode: lighten;
+  margin-right: -80px;
+}
 .topbar .mode {
   font-size: 12px;
   padding: 3px 8px;
   border-radius: 4px;
   background: var(--accent-dim);
   color: #cfe0ff;
+}
+
+@media (max-width: 700px) {
+  .brand-logo {
+    width: 220px;
+    height: 56px;
+    margin-right: -48px;
+  }
 }
 
 .banner {

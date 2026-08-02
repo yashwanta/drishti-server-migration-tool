@@ -11,7 +11,7 @@ type PlatformKind string
 const (
 	PlatformVMware  PlatformKind = "vmware"
 	PlatformProxmox PlatformKind = "proxmox"
-	PlatformHyperV   PlatformKind = "hyperv"
+	PlatformHyperV  PlatformKind = "hyperv"
 )
 
 // Role of a connection: source provides VMs to migrate; target receives them.
@@ -25,16 +25,16 @@ const (
 // Connection is a configured, authenticated platform endpoint. Secrets are
 // referenced by SecretRef and never stored inline.
 type Connection struct {
-	ID          string     `json:"id"`
-	Name        string     `json:"name"`
+	ID          string       `json:"id"`
+	Name        string       `json:"name"`
 	Kind        PlatformKind `json:"kind"`
-	Role        Role       `json:"role"`
-	Endpoint    string     `json:"endpoint"`
-	InsecureTLS bool       `json:"insecure_tls"`
-	Status      ConnStatus `json:"status"`
-	SecretRef   string     `json:"secret_ref,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	Role        Role         `json:"role"`
+	Endpoint    string       `json:"endpoint"`
+	InsecureTLS bool         `json:"insecure_tls"`
+	Status      ConnStatus   `json:"status"`
+	SecretRef   string       `json:"secret_ref,omitempty"`
+	CreatedAt   time.Time    `json:"created_at"`
+	UpdatedAt   time.Time    `json:"updated_at"`
 }
 
 type ConnStatus string
@@ -55,9 +55,9 @@ type InventoryRoot struct {
 
 // Datacenter groups source-side inventory.
 type Datacenter struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Clusters []Cluster  `json:"clusters"`
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	Clusters []Cluster `json:"clusters"`
 }
 
 type Cluster struct {
@@ -139,12 +139,12 @@ const (
 )
 
 type NIC struct {
-	ID        string `json:"id"`
-	Label     string `json:"label"`
+	ID         string `json:"id"`
+	Label      string `json:"label"`
 	MACAddress string `json:"mac_address"`
-	NetworkID string `json:"network_id"`
-	Connected bool   `json:"connected"`
-	Model     string `json:"model"`
+	NetworkID  string `json:"network_id"`
+	Connected  bool   `json:"connected"`
+	Model      string `json:"model"`
 }
 
 type Snapshot struct {
@@ -216,25 +216,37 @@ type TargetVM struct {
 // Plan is a draft or approved migration plan. It is created by a drop and
 // never executes a migration by itself.
 type Plan struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	SourceVMID   string       `json:"source_vm_id"`
-	SourceConnID string       `json:"source_connection_id"`
-	TargetNodeID string       `json:"target_node_id"`
-	TargetConnID string       `json:"target_connection_id"`
-	TargetVMName string       `json:"target_vm_name"`
-	TargetVMID   *int         `json:"target_vmid,omitempty"`
-	CPU          int          `json:"cpu"`
-	MemoryMB     int64        `json:"memory_mb"`
-	Firmware     Firmware     `json:"firmware"`
-	StorageMaps  []StorageMap `json:"storage_maps"`
-	NetworkMaps  []NetworkMap `json:"network_maps"`
-	Status       PlanStatus   `json:"status"`
-	DiskFormat   DiskFormat   `json:"disk_format"`
-	CreatedAt    time.Time    `json:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
-	CreatedBy    string       `json:"created_by"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	SourceVMID      string            `json:"source_vm_id"`
+	SourceConnID    string            `json:"source_connection_id"`
+	TargetNodeID    string            `json:"target_node_id"`
+	TargetConnID    string            `json:"target_connection_id"`
+	TargetVMName    string            `json:"target_vm_name"`
+	TargetVMID      *int              `json:"target_vmid,omitempty"`
+	CPU             int               `json:"cpu"`
+	MemoryMB        int64             `json:"memory_mb"`
+	Firmware        Firmware          `json:"firmware"`
+	StorageMaps     []StorageMap      `json:"storage_maps"`
+	NetworkMaps     []NetworkMap      `json:"network_maps"`
+	Status          PlanStatus        `json:"status"`
+	PreflightPassed bool              `json:"preflight_passed"`
+	DiskFormat      DiskFormat        `json:"disk_format"`
+	Strategy        MigrationStrategy `json:"strategy"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	CreatedBy       string            `json:"created_by"`
 }
+
+// MigrationStrategy controls how guest state is transferred. Cold remains
+// the default so older clients and stored plans retain the safest behavior.
+type MigrationStrategy string
+
+const (
+	MigrationStrategyCold    MigrationStrategy = "cold"
+	MigrationStrategyPVELive MigrationStrategy = "pve-live"
+	MigrationStrategyWarm    MigrationStrategy = "warm"
+)
 
 type PlanStatus string
 

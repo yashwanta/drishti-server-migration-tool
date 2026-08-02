@@ -230,11 +230,17 @@ func (e *Engine) runStep(j *Job, name string, fn func() error) {
 // StartExternal records a Proxmox-managed asynchronous migration task.
 func (e *Engine) StartExternal(plan domain.Plan, externalID string) *Job {
 	now := time.Now().UTC()
-	j := &Job{Job: domain.Job{ID: "job-" + plan.ID, PlanID: plan.ID, State: domain.JobRunning, StartedAt: &now, IdempotencyKey: plan.ID}, Steps: []Step{{Name: "proxmox_remote_migration", State: domain.JobRunning, StartedAt: &now, Message: "Proxmox task " + externalID}}}
+	stepName := "proxmox_remote_migration"
+	detail := "Offline Proxmox remote migration started; source deletion disabled."
+	if plan.Strategy == domain.MigrationStrategyPVELive {
+		stepName = "proxmox_live_migration"
+		detail = "Live Proxmox remote migration started in lab mode; source deletion disabled."
+	}
+	j := &Job{Job: domain.Job{ID: "job-" + plan.ID, PlanID: plan.ID, State: domain.JobRunning, StartedAt: &now, IdempotencyKey: plan.ID}, Steps: []Step{{Name: stepName, State: domain.JobRunning, StartedAt: &now, Message: "Proxmox task " + externalID}}}
 	e.state.mu.Lock()
 	e.state.jobs[j.ID] = j
 	e.state.mu.Unlock()
-	e.audit(domain.AuditEvent{ID: "evt-" + plan.ID + "-remote", Timestamp: now, Actor: "operator", Action: "job.remote_migration", Target: j.ID, Result: "running", Detail: "Offline Proxmox remote migration started; source deletion disabled."})
+	e.audit(domain.AuditEvent{ID: "evt-" + plan.ID + "-remote", Timestamp: now, Actor: "operator", Action: "job.remote_migration", Target: j.ID, Result: "running", Detail: detail})
 	return j
 }
 
@@ -255,7 +261,11 @@ func (e *Engine) FinishExternal(jobID string, taskErr error) {
 	} else {
 		j.State = domain.JobSucceeded
 		j.Steps[0].State = domain.JobSucceeded
-		j.Steps[0].Message = "completed; source retained and target remains powered off"
+		if j.Steps[0].Name == "proxmox_live_migration" {
+			j.Steps[0].Message = "live migration completed; target is running and retained source must remain stopped"
+		} else {
+			j.Steps[0].Message = "completed; source retained and target remains powered off"
+		}
 	}
 	j.Steps[0].FinishedAt = &now
 }

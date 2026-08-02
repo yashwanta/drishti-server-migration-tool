@@ -24,6 +24,7 @@ frontend/.vite/
 *.key
 *.p12
 secrets/
+artifacts/
 
 # Editor / OS
 .vscode/

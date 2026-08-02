@@ -56,6 +56,7 @@ type createPlanInput struct {
 	MemoryMB     int64               `json:"memory_mb"`
 	Firmware     string              `json:"firmware"`
 	DiskFormat   string              `json:"disk_format"`
+	Strategy     string              `json:"strategy"`
 	StorageMaps  []domain.StorageMap `json:"storage_maps"`
 	NetworkMaps  []domain.NetworkMap `json:"network_maps"`
 }
@@ -99,10 +100,18 @@ func (h *Handlers) createPlan(w http.ResponseWriter, r *http.Request) {
 		StorageMaps:  in.StorageMaps,
 		NetworkMaps:  in.NetworkMaps,
 		DiskFormat:   domain.DiskFormat(in.DiskFormat),
+		Strategy:     domain.MigrationStrategy(in.Strategy),
 		Status:       domain.PlanDraft,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
 		CreatedBy:    "operator",
+	}
+	if pl.Strategy == "" {
+		pl.Strategy = domain.MigrationStrategyCold
+	}
+	if pl.Strategy != domain.MigrationStrategyCold && pl.Strategy != domain.MigrationStrategyPVELive {
+		writeErr(w, http.StatusBadRequest, errorBody{Error: "strategy must be cold or pve-live; warm migration is not implemented yet", Code: "bad_request"})
+		return
 	}
 	if pl.DiskFormat != domain.DiskRaw && pl.DiskFormat != domain.DiskQCOW2 {
 		pl.DiskFormat = domain.DiskRaw

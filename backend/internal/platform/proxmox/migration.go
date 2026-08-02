@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -49,6 +50,12 @@ func (p *Probe) RemotePreflight(ctx context.Context, plan domain.Plan, source, t
 		}
 		checks = append(checks, domain.PreflightCheck{ID: id, Code: id, Status: status, Severity: severity, Message: message, Detail: detail})
 	}
+	warn := func(id, message, detail string) {
+		checks = append(checks, domain.PreflightCheck{ID: id, Code: id, Status: domain.CheckWarn, Severity: domain.SeverityWarning, Message: message, Detail: detail})
+	}
+	strategy := normalizedStrategy(plan.Strategy)
+	strategySupported := strategy == domain.MigrationStrategyCold || strategy == domain.MigrationStrategyPVELive
+	add("migration_strategy", "Migration strategy is implemented", strategySupported, string(strategy))
 	add("lab_mode_scope", "Both connections are Proxmox VE with source/target roles", source.Kind == domain.PlatformProxmox && target.Kind == domain.PlatformProxmox && source.Role == domain.RoleSource && target.Role == domain.RoleTarget, "Remote migration supports Proxmox QEMU guests only.")
 	add("separate_endpoints", "Source and target endpoints are different", normalizeCompare(source.Endpoint) != normalizeCompare(target.Endpoint), "Source and destination must not be the same API endpoint.")
 
@@ -65,7 +72,17 @@ func (p *Probe) RemotePreflight(ctx context.Context, plan domain.Plan, source, t
 	if !found {
 		return checks, nil
 	}
-	add("source_powered_off", "Source VM is powered off", vm.PowerState == domain.PowerOff, fmt.Sprintf("Current state: %s", vm.PowerState))
+	if strategy == domain.MigrationStrategyPVELive {
+		add("source_powered_on", "Source VM is running for live migration", vm.PowerState == domain.PowerOn, fmt.Sprintf("Current state: %s", vm.PowerState))
+		compatible, detail, err := p.liveMigrationCompatible(ctx, source, sourceNode, plan.SourceVMID)
+		if err != nil {
+			return nil, fmt.Errorf("live migration compatibility: %w", err)
+		}
+		add("live_migratable_devices", "VM has no unsupported passthrough devices", compatible, detail)
+		warn("live_source_retention", "Live migration retains a stopped source definition for rollback", "The destination becomes active after migration. Never start the retained source on the same production network.")
+	} else {
+		add("source_powered_off", "Source VM is powered off", vm.PowerState == domain.PowerOff, fmt.Sprintf("Current state: %s", vm.PowerState))
+	}
 	node, found := findTargetNode(targetInv, plan.TargetNodeID)
 	add("target_node_online", "Target node exists and is online", found && node.Online, plan.TargetNodeID)
 	if !found {
@@ -122,7 +139,7 @@ func (p *Probe) StartRemoteMigration(ctx context.Context, req RemoteMigrationReq
 		"target-vmid":     {strconv.Itoa(req.TargetVMID)},
 		"target-storage":  {req.Plan.StorageMaps[0].TargetStorageID},
 		"target-bridge":   {req.Plan.NetworkMaps[0].TargetBridge},
-		"online":          {"0"},
+		"online":          {boolFlag(normalizedStrategy(req.Plan.Strategy) == domain.MigrationStrategyPVELive)},
 		"delete":          {"0"},
 	}
 	sourceClient, err := newAPIClient(req.Source)
@@ -138,6 +155,47 @@ func (p *Probe) StartRemoteMigration(ctx context.Context, req RemoteMigrationReq
 		return RemoteMigrationResult{}, fmt.Errorf("Proxmox did not return a migration task ID")
 	}
 	return RemoteMigrationResult{UPID: upid, SourceNode: sourceNode, TargetNode: req.Plan.TargetNodeID, SourceVMID: sourceVMID, TargetVMID: req.TargetVMID}, nil
+}
+
+func normalizedStrategy(strategy domain.MigrationStrategy) domain.MigrationStrategy {
+	if strategy == "" {
+		return domain.MigrationStrategyCold
+	}
+	return strategy
+}
+
+func boolFlag(value bool) string {
+	if value {
+		return "1"
+	}
+	return "0"
+}
+
+func (p *Probe) liveMigrationCompatible(ctx context.Context, source domain.Connection, sourceNode, sourceVMID string) (bool, string, error) {
+	vmid, err := parseQEMUVMID(sourceVMID)
+	if err != nil {
+		return false, "", err
+	}
+	client, err := newAPIClient(source)
+	if err != nil {
+		return false, "", err
+	}
+	var cfg map[string]json.RawMessage
+	path := fmt.Sprintf("/api2/json/nodes/%s/qemu/%d/config", url.PathEscape(sourceNode), vmid)
+	if err := client.get(ctx, path, &cfg); err != nil {
+		return false, "", err
+	}
+	blocked := []string{}
+	for key := range cfg {
+		if strings.HasPrefix(key, "hostpci") || strings.HasPrefix(key, "usb") || key == "ivshmem" || key == "args" {
+			blocked = append(blocked, key)
+		}
+	}
+	if len(blocked) > 0 {
+		sort.Strings(blocked)
+		return false, "Unsupported devices/options: " + strings.Join(blocked, ", "), nil
+	}
+	return true, "No PCI/USB passthrough or custom QEMU arguments detected.", nil
 }
 
 func (p *Probe) WaitRemoteMigration(ctx context.Context, source domain.Connection, result RemoteMigrationResult, progress func(RemoteMigrationProgress)) error {

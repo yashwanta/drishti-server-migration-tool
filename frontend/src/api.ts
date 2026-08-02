@@ -26,7 +26,7 @@ async function health(): Promise<{ status: string; mode: string }> {
 }
 
 export interface CreateConnectionInput { name: string; kind: PlatformKind; role: ConnRole; endpoint: string; insecure_tls: boolean; secret_ref: string; }
-export interface CreatePlanInput { name: string; source_vm_id: string; source_connection_id: string; target_node_id: string; target_connection_id: string; target_vm_name: string; cpu: number; memory_mb: number; firmware: 'bios' | 'uefi'; disk_format: 'raw' | 'qcow2'; storage_maps: { source_disk_id: string; target_storage_id: string; target_format: 'raw' | 'qcow2' }[]; network_maps: { source_nic_id: string; target_bridge: string; vlan_id?: number }[]; }
+export interface CreatePlanInput { name: string; source_vm_id: string; source_connection_id: string; target_node_id: string; target_connection_id: string; target_vm_name: string; cpu: number; memory_mb: number; firmware: 'bios' | 'uefi'; disk_format: 'raw' | 'qcow2'; strategy: 'cold' | 'pve-live'; storage_maps: { source_disk_id: string; target_storage_id: string; target_format: 'raw' | 'qcow2' }[]; network_maps: { source_nic_id: string; target_bridge: string; vlan_id?: number }[]; }
 
 export const api = {
   health,

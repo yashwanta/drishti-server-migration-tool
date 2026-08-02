@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Plan, TargetNode, VM, Firmware } from '../types';
+import type { Plan, TargetNode, VM, Firmware, PlatformKind } from '../types';
 import { api } from '../api';
 
 interface Props {
@@ -7,6 +7,8 @@ interface Props {
   node: TargetNode;
   sourceConnId: string;
   targetConnId: string;
+  sourceKind: PlatformKind;
+  labMode: boolean;
   onClose: () => void;
   onCreated: (plan: Plan) => void;
 }
@@ -14,13 +16,14 @@ interface Props {
 type Step = 0 | 1 | 2 | 3;
 const STEP_NAMES = ['Source', 'Target', 'Mappings', 'Review'];
 
-export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCreated }: Props) {
+export function PlanWizard({ vm, node, sourceConnId, targetConnId, sourceKind, labMode, onClose, onCreated }: Props) {
   const [step, setStep] = useState<Step>(0);
   const [cpu, setCpu] = useState(vm.cpus);
   const [memory, setMemory] = useState(vm.memory_mb);
   const [firmware, setFirmware] = useState<Firmware>(vm.firmware);
   const [targetName, setTargetName] = useState(vm.name);
   const [diskFormat, setDiskFormat] = useState<'raw' | 'qcow2'>('qcow2');
+  const [strategy, setStrategy] = useState<'cold' | 'pve-live'>('cold');
   const [storageMaps, setStorageMaps] = useState<Record<string, string>>(
     Object.fromEntries(vm.disks.map((d) => [d.id, node.storage[0]?.id ?? ''])),
   );
@@ -49,6 +52,7 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
         memory_mb: memory,
         firmware,
         disk_format: diskFormat,
+        strategy,
         storage_maps: vm.disks.map((d) => ({
           source_disk_id: d.id,
           target_storage_id: storageMaps[d.id] ?? '',
@@ -90,6 +94,23 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
               <div className="summary-row"><span>Disks</span><span className="val">{vm.disks.length}</span></div>
               <div className="summary-row"><span>NICs</span><span className="val">{vm.nics.length}</span></div>
               <div className="summary-row"><span>Snapshots</span><span className="val">{vm.snapshots.length}</span></div>
+              <div className="field" style={{ marginTop: 14 }}>
+                <label>Migration Strategy</label>
+                <select value={strategy} onChange={(e) => setStrategy(e.target.value as 'cold' | 'pve-live')}>
+                  <option value="cold">Cold migration — safest, source must be off</option>
+                  <option value="pve-live" disabled={sourceKind !== 'proxmox' || !labMode}>PVE native live — lab only, source must be running</option>
+                  <option value="warm" disabled>Warm incremental sync — coming next</option>
+                </select>
+              </div>
+              {strategy === 'pve-live' && (
+                <div className="warn-box">
+                  LAB FEATURE: Proxmox will transfer the running VM and memory state. The retained source
+                  must remain stopped and must never share the production network with the destination.
+                </div>
+              )}
+              {sourceKind !== 'proxmox' && (
+                <div className="meta">VMware warm migration will become available after the CBT replication engine is implemented.</div>
+              )}
             </div>
           )}
 
@@ -162,6 +183,7 @@ export function PlanWizard({ vm, node, sourceConnId, targetConnId, onClose, onCr
               <div className="summary-row"><span>CPU / Memory</span><span className="val">{cpu} / {memory} MB</span></div>
               <div className="summary-row"><span>Firmware</span><span className="val">{firmware}</span></div>
               <div className="summary-row"><span>Disk Format</span><span className="val">{diskFormat}</span></div>
+              <div className="summary-row"><span>Strategy</span><span className="val">{strategy === 'pve-live' ? 'PVE native live (lab)' : 'Cold migration'}</span></div>
               <div className="summary-row"><span>Storage Maps</span><span className="val">{vm.disks.length}</span></div>
               <div className="summary-row"><span>Network Maps</span><span className="val">{vm.nics.length}</span></div>
               <div className="warn-box">

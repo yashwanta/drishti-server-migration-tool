@@ -107,3 +107,19 @@ func TestReadTaskProgressUsesLatestPercentage(t *testing.T) {
 		t.Fatalf("progress = %+v, ok=%v", progress, ok)
 	}
 }
+
+func TestMigrationStrategyControlsOnlineFlag(t *testing.T) {
+	tests := []struct {
+		strategy domain.MigrationStrategy
+		want     string
+	}{
+		{strategy: "", want: "0"},
+		{strategy: domain.MigrationStrategyCold, want: "0"},
+		{strategy: domain.MigrationStrategyPVELive, want: "1"},
+	}
+	for _, tt := range tests {
+		if got := boolFlag(normalizedStrategy(tt.strategy) == domain.MigrationStrategyPVELive); got != tt.want {
+			t.Errorf("strategy %q: online=%s, want %s", tt.strategy, got, tt.want)
+		}
+	}
+}
