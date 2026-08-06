@@ -20,6 +20,9 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
   const [name, setName] = useState('');
   const [endpoint, setEndpoint] = useState('');
   const [secretRef, setSecretRef] = useState('');
+  const [credentialMode, setCredentialMode] = useState<'direct' | 'reference'>(defaultRole === 'source' ? 'direct' : 'reference');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [insecureTls, setInsecureTls] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -32,12 +35,22 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
     role,
     endpoint: endpoint.trim(),
     insecure_tls: insecureTls,
-    secret_ref: secretRef.trim(),
+    secret_ref: credentialMode === 'reference' ? secretRef.trim() : undefined,
+    username: credentialMode === 'direct' ? username.trim() : undefined,
+    password: credentialMode === 'direct' ? password : undefined,
   });
 
+  const validate = () => {
+    if (!endpoint.trim()) return 'Endpoint (host or URL) is required.';
+    if (credentialMode === 'direct' && (!username.trim() || !password)) return 'Username and password are required.';
+    if (credentialMode === 'reference' && !secretRef.trim()) return 'Secret reference is required.';
+    return '';
+  };
+
   const submit = async () => {
-    if (!endpoint.trim()) {
-      setError('Endpoint (host or URL) is required.');
+    const validationError = validate();
+    if (validationError) {
+	  setError(validationError);
       return;
     }
     setSubmitting(true);
@@ -54,32 +67,20 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
   };
 
   const test = async () => {
-    if (!endpoint.trim()) {
-      setError('Enter an endpoint before testing.');
+    const validationError = validate();
+    if (validationError) {
+	  setError(validationError);
       return;
     }
     setTesting(true);
     setError('');
     setTestMsg('');
-    let tempConnectionId: string | null = null;
     try {
-      // Create then test, then remove if the user hasn't saved yet. For mock
-      // mode this always succeeds. In production a real probe runs here.
-      const conn = await api.createConnection(buildInput());
-      tempConnectionId = conn.id;
-      const res = await api.testConnection(conn.id);
+      const res = await api.probeConnection(buildInput());
       setTestMsg(`${res.status.toUpperCase()}: ${res.message}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      // Always remove the temporary record, including when the probe fails.
-      if (tempConnectionId) {
-        try {
-          await api.deleteConnection(tempConnectionId);
-        } catch {
-          // Preserve the probe result; a stale temp record can be removed from the dashboard.
-        }
-      }
       setTesting(false);
     }
   };
@@ -93,7 +94,11 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
         <div className="modal-body">
           <div className="field">
             <label>Platform</label>
-            <select value={kind} onChange={(e) => setKind(e.target.value as PlatformKind)}>
+            <select value={kind} onChange={(e) => {
+              const nextKind = e.target.value as PlatformKind;
+              setKind(nextKind);
+              setCredentialMode(nextKind === 'vmware' ? 'direct' : 'reference');
+            }}>
               {KIND_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
               ))}
@@ -130,16 +135,51 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
           </div>
 
           <div className="field">
-            <label>Secret Reference (vault path or token id)</label>
-            <input
-              value={secretRef}
-              onChange={(e) => setSecretRef(e.target.value)}
-              placeholder={kind === 'vmware' ? 'vmw/prod-admin' : 'pve/prod-token'}
-            />
-            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
-              Secrets are referenced by name and never stored in the UI or logs.
-            </div>
+            <label>Credentials</label>
+            <select value={credentialMode} onChange={(e) => setCredentialMode(e.target.value as 'direct' | 'reference')}>
+              {kind === 'vmware' && <option value="direct">Username &amp; password</option>}
+              <option value="reference">Secret reference</option>
+            </select>
           </div>
+
+          {credentialMode === 'direct' ? (
+            <>
+              <div className="field">
+                <label>Username</label>
+                <input
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder={kind === 'vmware' ? 'root or administrator@vsphere.local' : 'root@pam'}
+                  autoComplete="username"
+                />
+              </div>
+              <div className="field">
+                <label>Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                />
+                <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                  Kept only in backend memory for this session; never returned, persisted, or logged.
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="field">
+              <label>Secret Reference (vault path or token id)</label>
+              <input
+                value={secretRef}
+                onChange={(e) => setSecretRef(e.target.value)}
+                placeholder={kind === 'vmware' ? 'vmw/prod-admin' : 'pve/prod-token'}
+              />
+              <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
+                Requires a configured secret provider.
+              </div>
+            </div>
+          )}
 
           <div className="field">
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>

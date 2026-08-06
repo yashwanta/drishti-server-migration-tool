@@ -1,35 +1,36 @@
 # Known Limitations and Blocked Features
 
 **Version:** 0.1
-**Date:** 2026-07-24
+**Date:** 2026-08-06
 
 ## Current limitations
 
-### Mock mode only
-All platform operations use **mock adapters** that simulate the migration
-lifecycle. Real VMware (govmomi) and Proxmox (PVE API) connectors satisfy the
-same adapter interfaces but require actual credentials and infrastructure to
-build, test, and activate.
+### Real-mode execution remains locked
+Lab, live, and production modes select the real VMware and Proxmox adapters,
+PostgreSQL repositories, and worker conversion client. Execute, cutover, and
+rollback nevertheless return `501 execution_disabled` after authentication and
+authorization, pending a separate lab qualification and readiness review.
 
 **Impact:** The full workflow (plan, preflight, execute, validate, cutover,
 rollback) runs end-to-end but does not touch real VMs. This is intentional for
 safe development and pilot rehearsal.
 
-### No authentication
-There is no login or session management. RBAC roles and permission checks are
-implemented in code but not enforced via middleware (Phase 9 code complete,
-enforcement pending real auth provider).
+### Authentication users and sessions are process-local
+Session authentication and route-level RBAC are enforced. User definitions are
+loaded from a protected bcrypt-hash file and active server-side sessions are
+process-local, so a backend restart signs every operator out.
 
-**Impact:** Anyone with network access to the UI can create plans and run the
-migration workflow. Restrict network access accordingly.
+**Impact:** Deployments must provision the users file securely and operators
+must sign in again after a backend restart. There is no external identity
+provider, MFA, or distributed session store yet.
 
-### No persistent storage
-Plans, jobs, and audit events are stored **in-memory**. Restarting the backend
-loses all state. The Postgres schema baseline exists but the migrator
-implementation is not wired in production mode yet.
+### Connection registry and direct credentials remain process-local
+Plans, jobs, ordered job steps, and audit events use PostgreSQL in lab, live,
+and production modes. Platform connection registration and direct credentials
+remain process-local; direct passwords are deliberately never persisted.
 
-**Impact:** Not suitable for long-running migrations or audit retention
-requirements. Restart-safe for mock/testing only.
+**Impact:** Connections must be re-added after restart. Durable migration state
+remains available once the connections and ephemeral credentials are restored.
 
 ### Windows guest remediation is advisory
 VirtIO driver injection for Windows is modeled but not executed. Windows VMs
@@ -38,13 +39,14 @@ are flagged for manual review rather than automatically remediated.
 **Impact:** Windows migrations require manual VirtIO driver preparation before
 cutover.
 
-### No real disk transfer
-Disk export and conversion use placeholder data with checksums, not real VMDK
-files. The worker safelist and converter interface are production-ready but the
-actual qemu-img invocation runs against mock data.
+### Real conversion is not yet qualified with an exported lab VM
+The worker performs real `qemu-img` VMDK-to-raw/qcow2 conversion, publishes the
+output atomically, and records checksum evidence. It has passed a generated
+VMDK fixture test, but no operator-provided disposable VMware lab VM has yet
+been exported and migrated end-to-end.
 
-**Impact:** Disk sizes and transfer times are not representative of real
-migrations.
+**Impact:** Bootability and transfer timing for an actual VMware-exported disk
+remain a required lab qualification before execution can be considered.
 
 ## Blocked features (by design)
 

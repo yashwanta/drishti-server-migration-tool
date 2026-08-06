@@ -15,9 +15,16 @@ type SourceAdapter interface {
 	Inventory(ctx context.Context) (domain.InventoryRoot, error)
 	VM(ctx context.Context, vmID string) (domain.VM, error)
 	ExportDisk(ctx context.Context, vmID, diskID, destPath string) (ExportResult, error)
-	PowerOff(ctx context.Context, vmID string) error
-	PowerOn(ctx context.Context, vmID string) error
+	PowerOff(ctx context.Context, vmID string, approval PowerOffApproval) error
 	PowerState(ctx context.Context, vmID string) (domain.PowerState, error)
+}
+
+// PowerOffApproval binds a source power-off authorization to one approved plan
+// and VM. A caller cannot request a source mutation without presenting it.
+type PowerOffApproval struct {
+	PlanID   string
+	VMID     string
+	Approved bool
 }
 
 type ExportResult struct {
@@ -51,14 +58,18 @@ type CreateVMSpec struct {
 	Firmware       domain.Firmware
 	IdempotencyKey string
 	IsolatedBridge string
+	StorageID      string
 }
 
 type AttachDiskSpec struct {
-	Path       string
-	Format     domain.DiskFormat
-	SizeBytes  int64
-	Boot       bool
-	Controller string
+	Path           string
+	Format         domain.DiskFormat
+	SizeBytes      int64
+	Boot           bool
+	Controller     string
+	StorageID      string
+	DeviceIndex    int
+	IdempotencyKey string
 }
 
 // AdapterFactory creates the correct adapter for a connection.

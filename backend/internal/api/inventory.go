@@ -1,46 +1,156 @@
 package api
 
 import (
+	"context"
+	"fmt"
 	"net/http"
+	"sort"
+	"sync"
 	"time"
 
+	"github.com/drishti/hypershift/internal/auth"
 	"github.com/drishti/hypershift/internal/domain"
 )
 
-// PlanStore is a thread-safe in-memory plan store for Phase 0/1. Persistence
-// to Postgres arrives in Phase 6.
-type PlanStore struct {
-	mu    chanToken
-	plans map[string]domain.Plan
+// PlanBackend is implemented by the durable PostgreSQL repository.
+type PlanBackend interface {
+	ListPlans(context.Context) ([]domain.Plan, error)
+	GetPlan(context.Context, string) (domain.Plan, bool, error)
+	PutPlan(context.Context, domain.Plan) error
+	DeletePlan(context.Context, string) error
 }
 
-type chanToken struct{}
+type planApprovalBackend interface {
+	ApprovePlan(context.Context, string, bool, domain.AuditEvent) (domain.Plan, bool, error)
+}
+
+// PlanStore provides a concurrency-safe memory implementation in mock mode and
+// delegates to PostgreSQL in lab, live, and production modes.
+type PlanStore struct {
+	mu         sync.RWMutex
+	approvalMu sync.Mutex
+	plans      map[string]domain.Plan
+	backend    PlanBackend
+}
 
 func NewPlanStore() *PlanStore {
 	return &PlanStore{plans: make(map[string]domain.Plan)}
 }
 
+func NewPersistentPlanStore(backend PlanBackend) *PlanStore {
+	return &PlanStore{backend: backend}
+}
+
+func clonePlan(plan domain.Plan) domain.Plan {
+	plan.StorageMaps = append([]domain.StorageMap(nil), plan.StorageMaps...)
+	plan.NetworkMaps = append([]domain.NetworkMap(nil), plan.NetworkMaps...)
+	if plan.TargetVMID != nil {
+		vmid := *plan.TargetVMID
+		plan.TargetVMID = &vmid
+	}
+	return plan
+}
+
 // All returns a snapshot of all plans ordered by creation time.
 func (p *PlanStore) All() []domain.Plan {
-	out := make([]domain.Plan, 0, len(p.plans))
-	for _, pl := range p.plans {
-		out = append(out, pl)
-	}
+	out, _ := p.AllContext(context.Background())
 	return out
 }
 
+func (p *PlanStore) AllContext(ctx context.Context) ([]domain.Plan, error) {
+	if p.backend != nil {
+		return p.backend.ListPlans(ctx)
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]domain.Plan, 0, len(p.plans))
+	for _, pl := range p.plans {
+		out = append(out, clonePlan(pl))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
 func (p *PlanStore) Get(id string) (domain.Plan, bool) {
-	pl, ok := p.plans[id]
+	pl, ok, _ := p.GetContext(context.Background(), id)
 	return pl, ok
 }
 
-func (p *PlanStore) Put(pl domain.Plan) { p.plans[pl.ID] = pl }
+func (p *PlanStore) GetContext(ctx context.Context, id string) (domain.Plan, bool, error) {
+	if p.backend != nil {
+		return p.backend.GetPlan(ctx, id)
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	pl, ok := p.plans[id]
+	return clonePlan(pl), ok, nil
+}
 
-func (p *PlanStore) Delete(id string) { delete(p.plans, id) }
+func (p *PlanStore) Put(pl domain.Plan) { _ = p.PutContext(context.Background(), pl) }
+
+func (p *PlanStore) PutContext(ctx context.Context, pl domain.Plan) error {
+	if p.backend != nil {
+		return p.backend.PutPlan(ctx, pl)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.plans[pl.ID] = clonePlan(pl)
+	return nil
+}
+
+func (p *PlanStore) Delete(id string) { _ = p.DeleteContext(context.Background(), id) }
+
+func (p *PlanStore) DeleteContext(ctx context.Context, id string) error {
+	if p.backend != nil {
+		return p.backend.DeletePlan(ctx, id)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.plans, id)
+	return nil
+}
+
+// ApproveContext atomically records the plan approval and its audit event when
+// the backend supports transactions. The mock implementation serializes the
+// same operation under a process-local lock.
+func (p *PlanStore) ApproveContext(ctx context.Context, id string, powerOff bool, event domain.AuditEvent, audit *AuditStore) (domain.Plan, bool, error) {
+	if backend, ok := p.backend.(planApprovalBackend); ok {
+		return backend.ApprovePlan(ctx, id, powerOff, event)
+	}
+	p.approvalMu.Lock()
+	defer p.approvalMu.Unlock()
+	plan, found, err := p.GetContext(ctx, id)
+	if err != nil || !found {
+		return plan, found, err
+	}
+	if plan.Status != domain.PlanPreflight || !plan.PreflightPassed {
+		return plan, true, fmt.Errorf("plan requires a passing preflight before approval")
+	}
+	plan.Status = domain.PlanApproved
+	plan.SourcePowerOffApproved = powerOff
+	plan.UpdatedAt = event.Timestamp
+	if err := p.PutContext(ctx, plan); err != nil {
+		return domain.Plan{}, true, err
+	}
+	if err := audit.AppendContext(ctx, event); err != nil {
+		return domain.Plan{}, true, err
+	}
+	return plan, true, nil
+}
 
 // listPlans returns all draft/approved plans.
 func (h *Handlers) listPlans(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"plans": h.plans.All()})
+	plans, err := h.plans.AllContext(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"plans": plans})
 }
 
 // createPlanInput is the body accepted when a drop opens a plan. It intentionally
@@ -104,7 +214,7 @@ func (h *Handlers) createPlan(w http.ResponseWriter, r *http.Request) {
 		Status:       domain.PlanDraft,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
-		CreatedBy:    "operator",
+		CreatedBy:    auth.Actor(r.Context()),
 	}
 	if pl.Strategy == "" {
 		pl.Strategy = domain.MigrationStrategyCold
@@ -128,23 +238,33 @@ func (h *Handlers) createPlan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.plans.Put(pl)
-	h.audit.Append(domain.AuditEvent{
+	if err := h.plans.PutContext(r.Context(), pl); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
+	if err := h.audit.AppendContext(r.Context(), domain.AuditEvent{
 		ID:        "evt-" + newID(),
 		Timestamp: time.Now().UTC(),
-		Actor:     "operator",
+		Actor:     auth.Actor(r.Context()),
 		Action:    "plan.create",
 		Target:    pl.ID,
 		Result:    "draft",
 		Detail:    "Migration plan created from drag-and-drop; no migration executed.",
-	})
+	}); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "audit store unavailable", Code: "store_unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusCreated, pl)
 }
 
 // getPlan returns a single plan.
 func (h *Handlers) getPlan(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	pl, ok := h.plans.Get(id)
+	pl, ok, err := h.plans.GetContext(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
@@ -155,7 +275,11 @@ func (h *Handlers) getPlan(w http.ResponseWriter, r *http.Request) {
 // deletePlan archives (does not hard-delete) a draft plan.
 func (h *Handlers) deletePlan(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	pl, ok := h.plans.Get(id)
+	pl, ok, err := h.plans.GetContext(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
@@ -164,6 +288,9 @@ func (h *Handlers) deletePlan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, errorBody{Error: "only draft plans can be removed", Code: "conflict"})
 		return
 	}
-	h.plans.Delete(id)
+	if err := h.plans.DeleteContext(r.Context(), id); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }

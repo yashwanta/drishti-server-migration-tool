@@ -12,7 +12,20 @@ export type PlanStatus = 'draft' | 'preflight' | 'approved' | 'rejected' | 'arch
 export type MigrationStrategy = 'cold' | 'pve-live' | 'warm';
 export type Severity = 'info' | 'warning' | 'error';
 export type CheckStatus = 'pass' | 'fail' | 'warn' | 'skipped';
-export type JobState = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'rolled_back';
+export type JobState = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'rollback_prepared' | 'rolled_back';
+export type Role = 'viewer' | 'planner' | 'operator' | 'approver' | 'platform_admin' | 'auditor';
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  roles: Role[];
+}
+
+export interface Session {
+  user: User;
+  csrf_token: string;
+}
 
 export interface Connection {
   id: string;
@@ -22,7 +35,6 @@ export interface Connection {
   endpoint: string;
   insecure_tls: boolean;
   status: ConnStatus;
-  secret_ref?: string;
   created_at: string;
   updated_at: string;
 }
@@ -172,6 +184,7 @@ export interface Plan {
   network_maps: NetworkMap[];
   status: PlanStatus;
   preflight_passed: boolean;
+  source_power_off_approved: boolean;
   disk_format: DiskFormat;
   strategy: MigrationStrategy;
   created_at: string;

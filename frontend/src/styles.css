@@ -33,17 +33,20 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.topbar h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+.brand { display: flex; align-items: center; gap: 12px; }
 .brand-logo {
-  display: block;
-  width: 300px;
-  height: 72px;
+  width: 160px;
+  height: 90px;
+  flex: 0 0 160px;
   object-fit: contain;
-  object-position: left center;
-  background: var(--panel);
-  mix-blend-mode: lighten;
-  margin-right: -80px;
+  object-position: center;
+  mix-blend-mode: screen;
+  -webkit-mask-image: radial-gradient(ellipse 72% 68% at center, #000 62%, transparent 100%);
+  mask-image: radial-gradient(ellipse 72% 68% at center, #000 62%, transparent 100%);
 }
+.brand-title { display: flex; flex-direction: column; gap: 2px; }
+.topbar h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+.brand-title span { font-size: 11px; color: var(--muted); letter-spacing: 0.2px; }
 .topbar .mode {
   font-size: 12px;
   padding: 3px 8px;
@@ -54,9 +57,9 @@ body {
 
 @media (max-width: 700px) {
   .brand-logo {
-    width: 220px;
-    height: 56px;
-    margin-right: -48px;
+    width: 120px;
+    height: 68px;
+    flex-basis: 120px;
   }
 }
 
@@ -134,14 +137,44 @@ body {
 .target-vm { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 8px; margin-top: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
 .target-vm-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .target-vm .caps { grid-column: 1 / -1; margin: 0; }
-.activity-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
-.activity-item:last-child { border-bottom: 0; }
-.activity-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
-.activity-item .meta { color: var(--muted); font-size: 11px; margin-top: 5px; }
-.activity-step { color: var(--muted); font-size: 11px; margin-top: 5px; overflow-wrap: anywhere; }
-.progress-wrap { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--text); font-size: 11px; }
-.progress-bar { flex: 1; height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
-.progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.4s ease; }
+.activity-feed { min-width: 0; }
+.activity-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.activity-toolbar strong { font-size: 13px; }
+.activity-toolbar .meta { margin-top: 3px; }
+.activity-refresh { padding: 5px 10px; font-size: 11px; min-width: 66px; }
+.activity-refresh .spinner { width: 13px; height: 13px; }
+.activity-notice { padding: 8px 0; border-top: 1px solid var(--border); font-size: 11px; }
+.activity-timeline { position: relative; margin-left: 6px; padding-left: 18px; border-left: 1px solid var(--border); }
+.activity-entry { position: relative; margin: 0 0 9px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-2); }
+.activity-entry:last-child { margin-bottom: 0; }
+.activity-dot { position: absolute; left: -24px; top: 15px; width: 10px; height: 10px; border: 2px solid var(--panel); border-radius: 50%; background: var(--muted); }
+.activity-entry summary { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; list-style: none; }
+.activity-entry summary::-webkit-details-marker { display: none; }
+.activity-entry summary::after { content: '›'; color: var(--muted); transform: rotate(90deg); transition: transform 0.15s; }
+.activity-entry[open] summary::after { transform: rotate(270deg); }
+.activity-summary-copy { flex: 1; min-width: 0; }
+.activity-title { display: block; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+.activity-entry .meta { color: var(--muted); font-size: 10px; margin-top: 3px; }
+.activity-details { margin-top: 10px; padding-top: 5px; border-top: 1px solid var(--border); }
+.activity-step-row { display: grid; grid-template-columns: 10px minmax(0, 1fr); gap: 7px; padding: 6px 0; }
+.activity-step-marker { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--muted); }
+.activity-step-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; font-weight: 600; }
+.activity-message { margin-top: 4px; color: var(--text); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; }
+.activity-state { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: 999px; font-size: 10px; background: var(--border); color: var(--muted); }
+.activity-entry--audit { display: flex; align-items: flex-start; gap: 8px; }
+.activity-audit-result { flex: 0 0 auto; color: #cfe0ff; font-size: 10px; padding: 2px 6px; border-radius: 999px; background: var(--accent-dim); }
+.activity-entry--pending .activity-dot, .activity-step-row--pending .activity-step-marker { background: var(--muted); }
+.activity-entry--running { border-color: var(--accent); }
+.activity-entry--running .activity-dot, .activity-step-row--running .activity-step-marker { background: var(--accent); box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18); }
+.activity-state--running { color: #cfe0ff; background: var(--accent-dim); }
+.activity-entry--succeeded .activity-dot, .activity-step-row--succeeded .activity-step-marker { background: var(--green); }
+.activity-state--succeeded, .activity-state--rolled_back { color: var(--green); background: rgba(63,185,80,0.2); }
+.activity-entry--failed { border-color: rgba(248,81,73,0.55); }
+.activity-entry--failed .activity-dot, .activity-step-row--failed .activity-step-marker { background: var(--red); }
+.activity-state--failed, .activity-state--cancelled { color: var(--red); background: rgba(248,81,73,0.2); }
+.activity-entry--rollback_prepared .activity-dot, .activity-step-row--rollback_prepared .activity-step-marker,
+.activity-entry--rolled_back .activity-dot, .activity-step-row--rolled_back .activity-step-marker { background: var(--amber); }
+.activity-state--pending, .activity-state--rollback_prepared { color: var(--amber); background: rgba(210,153,34,0.2); }
 
 .badge {
   display: inline-block;

@@ -40,6 +40,9 @@ func (r *Runner) Run(ctx context.Context, name string, args []string) (Result, e
 			return Result{}, fmt.Errorf("invalid argument to %s: %w", name, err)
 		}
 	}
+	if err := cmdsafelist.ValidateArgs(name, args); err != nil {
+		return Result{}, fmt.Errorf("invalid argument set for %s: %w", name, err)
+	}
 
 	cctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
@@ -51,14 +54,18 @@ func (r *Runner) Run(ctx context.Context, name string, args []string) (Result, e
 
 	start := time.Now()
 	err = cmd.Run()
+	exitCode := -1
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
 	res := Result{
-		ExitCode: cmd.ProcessState.ExitCode(),
+		ExitCode: exitCode,
 		Duration: time.Since(start),
 		Stdout:   strings.TrimSpace(stdout.String()),
 		Stderr:   strings.TrimSpace(stderr.String()),
 	}
-	if err != nil && res.ExitCode == -1 {
-		return res, fmt.Errorf("%s did not complete: %w", name, err)
+	if err != nil {
+		return res, fmt.Errorf("%s failed with exit code %d: %w", name, res.ExitCode, err)
 	}
 	return res, nil
 }

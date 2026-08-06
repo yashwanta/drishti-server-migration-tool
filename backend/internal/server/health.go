@@ -57,13 +57,23 @@ func recovery(log *logging.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// cors adds permissive dev CORS headers. Tighten for production in Phase 9.
-func cors(next http.Handler) http.Handler {
+// cors permits same-origin requests by default and one explicitly configured
+// browser origin when credentials are used.
+func cors(allowedOrigin string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if allowedOrigin != "" && origin == allowedOrigin {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Add("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-CSRF-Token")
 		if r.Method == http.MethodOptions {
+			if origin != "" && origin != allowedOrigin {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

@@ -16,7 +16,9 @@ This is the repository bootstrap. It includes:
 - Tests across config, logging (secret redaction), mock inventory, API handlers, migrations, server, and worker.
 - `SECURITY.md`, `CONTRIBUTING.md`, ADR template, and architecture docs.
 
-No real platform credentials, no destructive operations, no real migration execution exist in this phase.
+Live mode includes a read-only VMware vCenter/standalone ESXi inventory connector.
+It does not expose VMware mutating operations. Proxmox inventory and migration
+execution remain mock-only at this stage.
 
 ## Prerequisites
 

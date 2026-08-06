@@ -35,14 +35,20 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(all) == 0 {
-		t.Fatal("expected at least one migration")
+	if len(all) != 3 {
+		t.Fatalf("migration count = %d, want 3", len(all))
 	}
 	if all[0].Version != 1 {
 		t.Errorf("first version = %d, want 1", all[0].Version)
 	}
 	if all[0].SQL == "" {
 		t.Error("migration SQL empty")
+	}
+	if all[1].Version != 2 || all[1].Name != "0002_runtime_persistence.sql" {
+		t.Fatalf("second migration = %#v", all[1])
+	}
+	if all[2].Version != 3 || all[2].Name != "0003_job_actors.sql" {
+		t.Fatalf("third migration = %#v", all[2])
 	}
 }
 

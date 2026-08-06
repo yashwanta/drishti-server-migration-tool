@@ -61,7 +61,9 @@ func TestCorsSetsHeaders(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /x", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) })
 	w := httptest.NewRecorder()
-	cors(mux).ServeHTTP(w, httptest.NewRequest("OPTIONS", "/x", nil))
+	r := httptest.NewRequest("OPTIONS", "/x", nil)
+	r.Header.Set("Origin", "https://ui.example")
+	cors("https://ui.example", mux).ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("options status = %d", w.Code)
 	}

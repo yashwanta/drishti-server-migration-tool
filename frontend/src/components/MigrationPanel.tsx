@@ -51,7 +51,13 @@ export function MigrationPanel({ plans, onRefresh }: Props) {
               className="btn"
               style={{ padding: '3px 8px', fontSize: 11 }}
               disabled={busy.length > 0 || p.status !== 'preflight' || !p.preflight_passed}
-              onClick={() => act('Approve', p.id, () => api.approvePlan(p.id))}
+              onClick={() => {
+                if (!confirm('Approve this migration plan? Approval alone does not start migration.')) return;
+                const approvePowerOff = confirm(
+                  'Separately authorize DRISHTI to power off this exact source VM if it is running?\n\nChoose Cancel if the VM is already off or you will stop it manually. DRISHTI will never power it back on, delete it, or unregister it.',
+                );
+                act('Approve', p.id, () => api.approvePlan(p.id, approvePowerOff));
+              }}
             >
               Approve
             </button>
@@ -83,7 +89,7 @@ export function MigrationPanel({ plans, onRefresh }: Props) {
               className="btn"
               style={{ padding: '3px 8px', fontSize: 11, borderColor: 'var(--red)', color: 'var(--red)' }}
               disabled={busy.length > 0}
-              onClick={() => { if (confirm('Rollback? Target will be isolated and source powered on.')) act('Rollback', p.id, () => api.rollbackJob(jobForPlan(p.id))) }}
+              onClick={() => { if (confirm('Prepare rollback? The target will be isolated and stopped. DRISHTI will not power on the VMware source; an authorized operator must do that manually.')) act('Rollback', p.id, () => api.rollbackJob(jobForPlan(p.id))) }}
             >
               Rollback
             </button>

@@ -112,23 +112,20 @@ func (s *MockSource) ExportDisk(ctx context.Context, vmID, diskID, destPath stri
 	}, nil
 }
 
-func (s *MockSource) PowerOff(ctx context.Context, vmID string) error {
+func (s *MockSource) PowerOff(ctx context.Context, vmID string, approval platform.PowerOffApproval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.power[vmID]; !ok {
+	state, ok := s.power[vmID]
+	if !ok {
 		return fmt.Errorf("vm %q not found", vmID)
+	}
+	if state == domain.PowerOff {
+		return nil
+	}
+	if !approval.Approved || approval.PlanID == "" || approval.VMID != vmID {
+		return fmt.Errorf("explicit source power-off approval for this plan and VM is required")
 	}
 	s.power[vmID] = domain.PowerOff
-	return nil
-}
-
-func (s *MockSource) PowerOn(ctx context.Context, vmID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, ok := s.power[vmID]; !ok {
-		return fmt.Errorf("vm %q not found", vmID)
-	}
-	s.power[vmID] = domain.PowerOn
 	return nil
 }
 
@@ -270,9 +267,9 @@ func (t *MockTarget) VMState(ctx context.Context, vmid int) (domain.PowerState, 
 // MockFactory caches adapters per connection so state (power, VM creation)
 // persists across API requests within a single process.
 type MockFactory struct {
-	mu       sync.Mutex
-	sources  map[string]*MockSource
-	targets  map[string]*MockTarget
+	mu      sync.Mutex
+	sources map[string]*MockSource
+	targets map[string]*MockTarget
 }
 
 func NewMockFactory() *MockFactory {

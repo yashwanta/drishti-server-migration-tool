@@ -1,7 +1,7 @@
 # Release-Readiness Verdict
 
 **Version:** 0.1
-**Date:** 2026-07-24
+**Date:** 2026-08-06
 **Assessor:** Codex (automated)
 
 ## Summary
@@ -25,7 +25,7 @@ The application is ready for:
 The application is NOT ready for:
 - Migrating real production VMs
 - Migrating real lab VMs (without real connectors)
-- Any environment requiring persistent state or authentication
+- Any production environment; real execution remains deliberately locked
 
 ## Evidence summary
 
@@ -44,11 +44,11 @@ The application is NOT ready for:
 
 ## What must happen before production use
 
-1. **Real VMware connector** - implement govmomi-based SourceAdapter
-2. **Real Proxmox connector** - implement PVE API-based TargetAdapter
-3. **PostgreSQL persistence** - wire the migrator for durable state
-4. **Authentication** - add session management and enforce RBAC middleware
-5. **Real disk transfer** - test qemu-img conversion with actual VMDK files
+1. **Real VMware connector qualification** - implementation exists; test export only against an operator-provided disposable lab VM
+2. **Real Proxmox connector qualification** - implementation exists; test create/import only against an operator-provided disposable lab target
+3. **PostgreSQL operations** - implementation and concurrency tests exist; establish backup, restore, and monitoring procedures
+4. **Authentication operations** - session/RBAC implementation exists; provision users securely, rotate credentials, and test backup access procedures
+5. **Real disk transfer qualification** - generated VMDK conversion passes; test a VMware-exported disposable lab VMDK for bootability
 6. **Real VirtIO injection** - test Windows guest driver preparation
 7. **Lab pilot** - migrate a real disposable lab VM end-to-end
 8. **Maintenance window** - approved window with rollback plan before any production migration
@@ -58,8 +58,8 @@ The application is NOT ready for:
 | Risk | Severity | Mitigation |
 |------|----------|------------|
 | Mock-only: untested against real APIs | High | Real connectors required before production |
-| In-memory state: not durable | High | PostgreSQL persistence required |
-| No auth: anyone can operate | High | Authentication required before deployment |
+| Process-local connection credentials and sessions | Medium | Re-register connections and sign in after restart; evaluate durable encrypted providers |
+| Auth file has no MFA/external IdP | Medium | Protect and rotate the file; integrate an organizational identity provider before production |
 | Windows VirtIO not tested | Medium | Manual remediation path; lab test required |
 | Real disk transfer performance unknown | Medium | Pilot measurements required |
 
@@ -73,8 +73,9 @@ are complete.
 This release candidate demonstrates a complete, safe, auditable migration
 workflow design. The safety invariants are enforced in code and verified by
 test. The path to production is clear: implement real platform connectors
-behind the existing adapter interfaces, wire persistence, add authentication,
-and run a lab pilot with disposable VMs.
+behind the existing adapter interfaces, wire persistence and authentication,
+then run a lab pilot with disposable VMs. Those implementations now exist but
+remain unqualified against an operator-provided disposable lab environment.
 
 **Do not approve production use of this build. Production readiness requires
 real infrastructure testing that cannot be automated in mock mode.**

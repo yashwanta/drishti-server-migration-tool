@@ -10,6 +10,8 @@ bin/
 *.test
 *.out
 coverage.txt
+.gocache/
+.gocache-*/
 
 # Node / frontend
 frontend/node_modules/

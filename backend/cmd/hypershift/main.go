@@ -7,15 +7,21 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/drishti/hypershift/internal/api"
+	"github.com/drishti/hypershift/internal/auth"
 	"github.com/drishti/hypershift/internal/config"
+	"github.com/drishti/hypershift/internal/converter"
+	"github.com/drishti/hypershift/internal/credential"
 	"github.com/drishti/hypershift/internal/domain"
 	"github.com/drishti/hypershift/internal/job"
 	"github.com/drishti/hypershift/internal/logging"
 	"github.com/drishti/hypershift/internal/mock"
+	"github.com/drishti/hypershift/internal/platform/adapterfactory"
 	"github.com/drishti/hypershift/internal/platform/proxmox"
 	"github.com/drishti/hypershift/internal/server"
+	"github.com/drishti/hypershift/internal/store"
 )
 
 func main() {
@@ -38,6 +44,10 @@ func run() error {
 	if cfg.Mode == config.ModeMock {
 		log.Info("running in MOCK mode: no platform connections will be attempted")
 	}
+	authService, err := auth.LoadUsers(cfg.AuthUsersFile, cfg.SessionTTL, cfg.SessionSecure)
+	if err != nil {
+		return fmt.Errorf("initialize authentication: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -48,28 +58,55 @@ func run() error {
 	}
 	plans := api.NewPlanStore()
 	audit := api.NewAuditStore()
-	handlers := api.NewHandlers(provider, plans, audit)
-	if cfg.Mode == config.ModeLab {
-		handlers = api.NewHandlersWithProbe(provider, plans, audit, proxmox.NewProbe())
-	}
-
-	// Wire migration lifecycle: job engine + mock adapter factory.
-	workDir := os.TempDir()
-	factory := api.NewMockFactory()
 	jobState := job.NewState()
-	jobEng := job.NewEngine(jobState, factory, workDir, func(e domain.AuditEvent) {
-		audit.Append(e)
-	})
-	jobEng.SetPlanSaver(func(p domain.Plan) { plans.Put(p) })
-	mh := api.NewMigrationHandlers(handlers, jobEng, factory, workDir)
 	if cfg.Mode != config.ModeMock {
-		mh.DisableExecution()
+		databaseContext, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		database, err := store.OpenPostgres(databaseContext, cfg.DBURL)
+		if err != nil {
+			return fmt.Errorf("initialize durable store: %w", err)
+		}
+		defer database.Close()
+		plans = api.NewPersistentPlanStore(database)
+		audit = api.NewPersistentAuditStore(database)
+		jobState = job.NewPersistentState(database)
 	}
-	if cfg.Mode == config.ModeLab {
-		mh.EnableLabRemoteMigration(proxmox.NewProbe(), cfg.EnableLabMigration)
+	creds := credential.NewMemory()
+	handlers := api.NewHandlersWithRuntime(provider, plans, audit, cfg.Mode, nil, creds)
+	if cfg.Mode != config.ModeMock {
+		handlers = api.NewHandlersWithRuntime(provider, plans, audit, cfg.Mode, proxmox.NewProbe(), creds)
 	}
 
-	srv := server.New(cfg, log)
+	// Adapter selection is real outside mock mode. Mutating HTTP execution is
+	// enabled later only by the exact lab-mode, dual-interlock gate.
+	workDir := cfg.WorkspaceRoot
+	factory, err := adapterfactory.New(cfg, creds)
+	if err != nil {
+		return fmt.Errorf("select platform adapters: %w", err)
+	}
+	jobEng := job.NewEngine(jobState, factory, workDir, func(ctx context.Context, event domain.AuditEvent) error {
+		return audit.AppendContext(ctx, event)
+	})
+	diskConverter := converter.DiskConverter(converter.NewMock())
+	if cfg.Mode != config.ModeMock {
+		diskConverter, err = converter.NewWorkerClient(cfg.WorkerURL, nil)
+		if err != nil {
+			return fmt.Errorf("configure conversion worker: %w", err)
+		}
+	}
+	jobEng.SetDiskConverter(diskConverter)
+	jobEng.SetPlanSaver(func(ctx context.Context, plan domain.Plan) error {
+		return plans.PutContext(ctx, plan)
+	})
+	mh := api.NewMigrationHandlers(handlers, jobEng, factory, workDir)
+	mh.ConfigureLabExecution(cfg.Mode, cfg.EnableLabMigration, cfg.EnablePlatformMutation)
+	if cfg.Mode == config.ModeLab && cfg.EnableLabMigration && cfg.EnablePlatformMutation {
+		log.Info("lab-only migration execute, cutover, and rollback routes enabled by both explicit interlocks")
+	} else {
+		log.Info("migration execute, cutover, and rollback routes remain locked for this runtime")
+	}
+
+	srv := server.New(cfg, log, authService)
 	handlers.Register(srv.Router())
 	mh.RegisterMigration(srv.Router())
 

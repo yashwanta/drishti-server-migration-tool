@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/drishti/hypershift/internal/auth"
+	"github.com/drishti/hypershift/internal/config"
 	"github.com/drishti/hypershift/internal/cutover"
 	"github.com/drishti/hypershift/internal/domain"
 	"github.com/drishti/hypershift/internal/job"
@@ -27,22 +30,41 @@ type MigrationHandlers struct {
 	factory           platform.AdapterFactory
 	workDir           string
 	executionDisabled bool
+	executionLocked   bool
 	real              *proxmox.Probe
 }
 
 func NewMigrationHandlers(h *Handlers, jobEng *job.Engine, factory platform.AdapterFactory, workDir string) *MigrationHandlers {
-	return &MigrationHandlers{Handlers: h, jobEng: jobEng, pre: preflight.New(), cut: cutover.New(), factory: factory, workDir: workDir}
+	return &MigrationHandlers{Handlers: h, jobEng: jobEng, pre: preflight.New(), cut: cutover.New(), factory: factory, workDir: workDir, executionDisabled: true, executionLocked: true}
 }
 
-// DisableExecution prevents a real-mode deployment from invoking the mock job
-// engine. Real execution is enabled only after a production adapter exists.
-func (m *MigrationHandlers) DisableExecution() { m.executionDisabled = true }
+// DisableExecution permanently locks mutating migration routes for this
+// process. Adapter, persistence, and worker wiring cannot override the lock.
+func (m *MigrationHandlers) DisableExecution() {
+	m.executionDisabled = true
+	m.executionLocked = true
+}
+
+// ConfigureLabExecution keeps migration mutation routes fail-closed unless the
+// runtime is exactly lab mode and both independent operator interlocks are
+// enabled. Mock, live, and production can never be unlocked by this method.
+// The permanent lock remains set so legacy enabling hooks cannot change the
+// decision after startup.
+func (m *MigrationHandlers) ConfigureLabExecution(mode config.RunMode, enableLabMigration, enablePlatformMutation bool) {
+	m.executionDisabled = true
+	m.executionLocked = true
+	if mode == config.ModeLab && enableLabMigration && enablePlatformMutation {
+		m.executionDisabled = false
+	}
+}
 
 // EnableLabRemoteMigration installs the real Proxmox migration path. Callers
 // must only invoke this after the explicit lab mutation interlock is enabled.
 func (m *MigrationHandlers) EnableLabRemoteMigration(real *proxmox.Probe, enableExecution bool) {
 	m.real = real
-	m.executionDisabled = !enableExecution
+	if !m.executionLocked {
+		m.executionDisabled = !enableExecution
+	}
 }
 
 func (m *MigrationHandlers) RegisterMigration(mx *http.ServeMux) {
@@ -84,7 +106,11 @@ func (e *notFoundErr) Error() string { return e.name + " not found" }
 
 func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	plan, ok := m.plans.Get(id)
+	plan, ok, err := m.plans.GetContext(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
@@ -110,13 +136,19 @@ func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request)
 		}
 		plan.Status = domain.PlanPreflight
 		plan.PreflightPassed = pass
-		m.plans.Put(plan)
+		if err := m.plans.PutContext(r.Context(), plan); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+			return
+		}
 		writeJSON(w, http.StatusOK, preflightResponse{PlanID: plan.ID, Pass: pass, Checks: checks, Blocked: blocked})
 		return
 	}
-	srcAdapter, _ := m.factory.Source(srcConn)
-	tgtAdapter, _ := m.factory.Target(tgtConn)
-	ctx := context.Background()
+	srcAdapter, tgtAdapter, err := m.resolveAdapters(srcConn, tgtConn)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "platform adapter unavailable", Detail: err.Error(), Code: "adapter_unavailable"})
+		return
+	}
+	ctx := r.Context()
 	vm, err := srcAdapter.VM(ctx, plan.SourceVMID)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errorBody{Error: err.Error(), Code: "bad_request"})
@@ -129,13 +161,22 @@ func (m *MigrationHandlers) runPreflight(w http.ResponseWriter, r *http.Request)
 	}
 	if len(plan.StorageMaps) == 0 {
 		plan.StorageMaps = autoStorageMaps(vm, node)
-		m.plans.Put(plan)
+		if err := m.plans.PutContext(r.Context(), plan); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+			return
+		}
 	}
 	result := m.pre.Run(plan, vm, node)
 	plan.Status = domain.PlanPreflight
 	plan.PreflightPassed = result.Pass
-	m.plans.Put(plan)
-	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "plan.preflight", Target: plan.ID, Result: boolStr(result.Pass), Detail: "Preflight checks ran."})
+	if err := m.plans.PutContext(r.Context(), plan); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
+	if err := m.audit.AppendContext(r.Context(), domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: auth.Actor(r.Context()), Action: "plan.preflight", Target: plan.ID, Result: boolStr(result.Pass), Detail: "Preflight checks ran."}); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "audit store unavailable", Code: "store_unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, preflightResponse{PlanID: plan.ID, Pass: result.Pass, Checks: result.Checks, Blocked: result.Blocked})
 }
 
@@ -160,7 +201,11 @@ func autoStorageMaps(vm domain.VM, node domain.TargetNode) []domain.StorageMap {
 
 func (m *MigrationHandlers) approvePlan(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	plan, ok := m.plans.Get(id)
+	plan, ok, err := m.plans.GetContext(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
@@ -169,24 +214,43 @@ func (m *MigrationHandlers) approvePlan(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusConflict, errorBody{Error: "plan requires a passing preflight before approval", Code: "preflight_required"})
 		return
 	}
-	plan.Status = domain.PlanApproved
-	plan.UpdatedAt = time.Now().UTC()
-	m.plans.Put(plan)
-	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "plan.approve", Target: plan.ID, Result: "approved", Detail: "Migration plan approved."})
+	var approval struct {
+		ApproveSourcePowerOff bool `json:"approve_source_power_off"`
+	}
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &approval, 1<<10); err != nil {
+			writeErr(w, http.StatusBadRequest, errorBody{Error: "invalid approval request", Detail: err.Error(), Code: "bad_request"})
+			return
+		}
+	}
+	detail := "Migration plan approved; source power-off was not authorized."
+	if approval.ApproveSourcePowerOff {
+		detail = "Migration plan and source power-off for the named source VM were explicitly approved."
+	}
+	event := domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: auth.Actor(r.Context()), Action: "plan.approve", Target: plan.ID, Result: "approved", Detail: detail}
+	plan, ok, err = m.plans.ApproveContext(r.Context(), plan.ID, approval.ApproveSourcePowerOff, event, m.audit)
+	if err != nil {
+		writeErr(w, http.StatusConflict, errorBody{Error: err.Error(), Code: "preflight_required"})
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
+		return
+	}
 	writeJSON(w, http.StatusOK, plan)
 }
 
 func (m *MigrationHandlers) executeMigration(w http.ResponseWriter, r *http.Request) {
 	if m.executionDisabled {
-		writeErr(w, http.StatusNotImplemented, errorBody{
-			Error:  "real migration execution is not implemented",
-			Code:   "not_implemented",
-			Detail: "Connection testing is real in lab mode, but inventory, transfer, cutover, and rollback remain disabled.",
-		})
+		m.writeExecutionDisabled(w)
 		return
 	}
 	id := normalizeID(r.PathValue("id"))
-	plan, ok := m.plans.Get(id)
+	plan, ok, err := m.plans.GetContext(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
@@ -207,30 +271,51 @@ func (m *MigrationHandlers) executeMigration(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		plan.TargetVMID = &result.TargetVMID
-		m.plans.Put(plan)
-		j := m.jobEng.StartExternal(plan, result.UPID)
+		if err := m.plans.PutContext(r.Context(), plan); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+			return
+		}
+		j, err := m.jobEng.StartExternal(r.Context(), plan, result.UPID)
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+			return
+		}
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Hour)
 			defer cancel()
 			err := m.real.WaitRemoteMigration(ctx, srcConn, result, func(progress proxmox.RemoteMigrationProgress) {
-				m.jobEng.UpdateExternal(j.ID, progress.Message)
+				_ = m.jobEng.UpdateExternal(ctx, j.ID, progress.Message)
 			})
 			if err == nil {
 				err = m.real.VerifyRemoteMigration(ctx, srcConn, tgtConn, result)
 			}
-			m.jobEng.FinishExternal(j.ID, err)
+			_ = m.jobEng.FinishExternal(ctx, j.ID, err)
 		}()
 		writeJSON(w, http.StatusAccepted, j)
 		return
 	}
-	srcAdapter, _ := m.factory.Source(srcConn)
-	tgtAdapter, _ := m.factory.Target(tgtConn)
-	ctx := context.Background()
-	vm, _ := srcAdapter.VM(ctx, plan.SourceVMID)
-	node, _ := tgtAdapter.Node(ctx, plan.TargetNodeID)
+	srcAdapter, tgtAdapter, err := m.resolveAdapters(srcConn, tgtConn)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "platform adapter unavailable", Detail: err.Error(), Code: "adapter_unavailable"})
+		return
+	}
+	ctx := r.Context()
+	vm, err := srcAdapter.VM(ctx, plan.SourceVMID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, errorBody{Error: "source VM lookup failed", Detail: err.Error(), Code: "source_lookup_failed"})
+		return
+	}
+	node, err := tgtAdapter.Node(ctx, plan.TargetNodeID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, errorBody{Error: "target node lookup failed", Detail: err.Error(), Code: "target_lookup_failed"})
+		return
+	}
 	if len(plan.StorageMaps) == 0 {
 		plan.StorageMaps = autoStorageMaps(vm, node)
-		m.plans.Put(plan)
+		if err := m.plans.PutContext(r.Context(), plan); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+			return
+		}
 	}
 	j, err := m.jobEng.ExecutePlan(ctx, plan, vm, node, srcConn, tgtConn)
 	if err != nil {
@@ -241,13 +326,21 @@ func (m *MigrationHandlers) executeMigration(w http.ResponseWriter, r *http.Requ
 }
 
 func (m *MigrationHandlers) listJobs(w http.ResponseWriter, r *http.Request) {
-	jobs := m.jobEng.List()
+	jobs, err := m.jobEng.List(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
 func (m *MigrationHandlers) getJob(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	j, ok := m.jobEng.Get(id)
+	j, ok, err := m.jobEng.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
 		return
@@ -267,21 +360,36 @@ type validationCheckJSON struct {
 
 func (m *MigrationHandlers) validateJob(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	j, ok := m.jobEng.Get(id)
+	j, ok, err := m.jobEng.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
 		return
 	}
-	plan, ok := m.plans.Get(j.PlanID)
+	plan, ok, err := m.plans.GetContext(r.Context(), j.PlanID)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
 	}
 	srcConn, tgtConn, _ := m.resolveSourceTarget(plan)
-	srcAdapter, _ := m.factory.Source(srcConn)
-	tgtAdapter, _ := m.factory.Target(tgtConn)
-	ctx := context.Background()
-	vm, _ := srcAdapter.VM(ctx, plan.SourceVMID)
+	srcAdapter, tgtAdapter, err := m.resolveAdapters(srcConn, tgtConn)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "platform adapter unavailable", Detail: err.Error(), Code: "adapter_unavailable"})
+		return
+	}
+	ctx := r.Context()
+	vm, err := srcAdapter.VM(ctx, plan.SourceVMID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, errorBody{Error: "source VM lookup failed", Detail: err.Error(), Code: "source_lookup_failed"})
+		return
+	}
 	prof := validation.Default(vm)
 	vmid := 0
 	if plan.TargetVMID != nil {
@@ -294,7 +402,10 @@ func (m *MigrationHandlers) validateJob(w http.ResponseWriter, r *http.Request) 
 	for i, c := range result.Checks {
 		checks[i] = validationCheckJSON{Name: c.Name, Status: c.Status, Detail: c.Detail}
 	}
-	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "job.validate", Target: j.ID, Result: boolStr(result.Passed), Detail: "Validation ran."})
+	if err := m.audit.AppendContext(r.Context(), domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: auth.Actor(r.Context()), Action: "job.validate", Target: j.ID, Result: boolStr(result.Passed), Detail: "Validation ran."}); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "audit store unavailable", Code: "store_unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, validateResponse{Passed: result.Passed, Checks: checks})
 }
 
@@ -306,22 +417,41 @@ type cutoverResponse struct {
 }
 
 func (m *MigrationHandlers) cutoverJob(w http.ResponseWriter, r *http.Request) {
+	if m.executionDisabled {
+		m.writeExecutionDisabled(w)
+		return
+	}
 	id := normalizeID(r.PathValue("id"))
-	j, ok := m.jobEng.Get(id)
+	j, ok, err := m.jobEng.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
 		return
 	}
-	plan, ok := m.plans.Get(j.PlanID)
+	plan, ok, err := m.plans.GetContext(r.Context(), j.PlanID)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
 	}
 	srcConn, tgtConn, _ := m.resolveSourceTarget(plan)
-	srcAdapter, _ := m.factory.Source(srcConn)
-	tgtAdapter, _ := m.factory.Target(tgtConn)
-	ctx := context.Background()
-	vm, _ := srcAdapter.VM(ctx, plan.SourceVMID)
+	srcAdapter, tgtAdapter, err := m.resolveAdapters(srcConn, tgtConn)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "platform adapter unavailable", Detail: err.Error(), Code: "adapter_unavailable"})
+		return
+	}
+	ctx := r.Context()
+	vm, err := srcAdapter.VM(ctx, plan.SourceVMID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, errorBody{Error: "source VM lookup failed", Detail: err.Error(), Code: "source_lookup_failed"})
+		return
+	}
 	facts := remediation.CollectFacts(vm)
 	prof := validation.Default(vm)
 	vmid := 0
@@ -338,52 +468,90 @@ func (m *MigrationHandlers) cutoverJob(w http.ResponseWriter, r *http.Request) {
 	j.State = domain.JobSucceeded
 	fin := time.Now().UTC()
 	j.FinishedAt = &fin
-	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "job.cutover", Target: j.ID, Result: "succeeded", Detail: "Cutover completed."})
+	if err := m.jobEng.Save(r.Context(), j); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
+	if err := m.audit.AppendContext(r.Context(), domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: auth.Actor(r.Context()), Action: "job.cutover", Target: j.ID, Result: "succeeded", Detail: "Cutover completed."}); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "audit store unavailable", Code: "store_unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, cutoverResponse{Success: res.Success, Steps: res.Steps, RetentionDeadline: res.RetentionDeadline.Format(time.RFC3339)})
 }
 
 type rollbackResponse struct {
-	Success bool     `json:"success"`
-	Steps   []string `json:"steps"`
-	Warning string   `json:"warning,omitempty"`
+	Success              bool     `json:"success"`
+	ManualActionRequired bool     `json:"manual_action_required"`
+	Steps                []string `json:"steps"`
+	Warning              string   `json:"warning,omitempty"`
 }
 
 func (m *MigrationHandlers) rollbackJob(w http.ResponseWriter, r *http.Request) {
+	if m.executionDisabled {
+		m.writeExecutionDisabled(w)
+		return
+	}
 	id := normalizeID(r.PathValue("id"))
-	j, ok := m.jobEng.Get(id)
+	j, ok, err := m.jobEng.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
 		return
 	}
-	plan, ok := m.plans.Get(j.PlanID)
+	plan, ok, err := m.plans.GetContext(r.Context(), j.PlanID)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "plan not found", Code: "not_found"})
 		return
 	}
 	srcConn, tgtConn, _ := m.resolveSourceTarget(plan)
-	srcAdapter, _ := m.factory.Source(srcConn)
-	tgtAdapter, _ := m.factory.Target(tgtConn)
-	ctx := context.Background()
+	srcAdapter, tgtAdapter, err := m.resolveAdapters(srcConn, tgtConn)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "platform adapter unavailable", Detail: err.Error(), Code: "adapter_unavailable"})
+		return
+	}
+	ctx := r.Context()
 	res, err := m.cut.Rollback(ctx, srcAdapter, tgtAdapter, plan)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errorBody{Error: res.Warning, Code: "rollback_failed"})
 		return
 	}
-	j.State = domain.JobRolledBack
+	j.State = domain.JobRollbackPrepared
 	fin := time.Now().UTC()
 	j.FinishedAt = &fin
-	m.audit.Append(domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: "operator", Action: "job.rollback", Target: j.ID, Result: "rolled_back", Detail: "Rollback completed; source restored."})
-	writeJSON(w, http.StatusOK, rollbackResponse{Success: res.Success, Steps: res.Steps, Warning: res.Warning})
+	if err := m.jobEng.Save(r.Context(), j); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
+	if err := m.audit.AppendContext(r.Context(), domain.AuditEvent{ID: "evt-" + newID(), Timestamp: nowUTC(), Actor: auth.Actor(r.Context()), Action: "job.rollback", Target: j.ID, Result: "target_isolated", Detail: "Target isolated and stopped; an authorized VMware operator must start and validate the retained source manually."}); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "audit store unavailable", Code: "store_unavailable"})
+		return
+	}
+	writeJSON(w, http.StatusOK, rollbackResponse{Success: res.Success, ManualActionRequired: res.ManualActionRequired, Steps: res.Steps, Warning: res.Warning})
 }
 
 func (m *MigrationHandlers) getReport(w http.ResponseWriter, r *http.Request) {
 	id := normalizeID(r.PathValue("id"))
-	j, ok := m.jobEng.Get(id)
+	j, ok, err := m.jobEng.Get(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "job store unavailable", Code: "store_unavailable"})
+		return
+	}
 	if !ok {
 		writeErr(w, http.StatusNotFound, errorBody{Error: "job not found", Code: "not_found"})
 		return
 	}
-	plan, _ := m.plans.Get(j.PlanID)
+	plan, _, err := m.plans.GetContext(r.Context(), j.PlanID)
+	if err != nil {
+		writeErr(w, http.StatusServiceUnavailable, errorBody{Error: "plan store unavailable", Code: "store_unavailable"})
+		return
+	}
 	steps := make([]reports.ReportStep, len(j.Steps))
 	for i, s := range j.Steps {
 		steps[i] = reports.ReportStep{Name: s.Name, Status: string(s.State), StartedAt: s.StartedAt, FinishedAt: s.FinishedAt, Message: s.Message}
@@ -393,6 +561,30 @@ func (m *MigrationHandlers) getReport(w http.ResponseWriter, r *http.Request) {
 }
 
 func NewMockFactory() platform.AdapterFactory { return mockplatform.NewMockFactory() }
+
+func (m *MigrationHandlers) resolveAdapters(source, target domain.Connection) (platform.SourceAdapter, platform.TargetAdapter, error) {
+	if m.factory == nil {
+		return nil, nil, fmt.Errorf("adapter factory is not configured")
+	}
+	sourceAdapter, err := m.factory.Source(source)
+	if err != nil {
+		return nil, nil, fmt.Errorf("source adapter: %w", err)
+	}
+	targetAdapter, err := m.factory.Target(target)
+	if err != nil {
+		return nil, nil, fmt.Errorf("target adapter: %w", err)
+	}
+	return sourceAdapter, targetAdapter, nil
+}
+
+func (m *MigrationHandlers) writeExecutionDisabled(w http.ResponseWriter) {
+	writeErr(w, http.StatusNotImplemented, errorBody{
+		Error:  "migration execution is disabled",
+		Code:   "execution_disabled",
+		Detail: "Execution, cutover, and rollback are available only in explicitly enabled lab mode; this runtime remains locked.",
+	})
+}
+
 func ensureWorkDir(dir string) string {
 	d := filepath.Join(dir, "jobs")
 	_ = os.MkdirAll(d, 0o755)

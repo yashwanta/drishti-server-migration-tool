@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { Connection, InventoryRoot, Job, Plan, TargetNode, VM, ConnRole, PlatformKind } from './types';
+import type { FormEvent } from 'react';
+import type { Connection, InventoryRoot, Plan, TargetNode, VM, ConnRole, PlatformKind, Session } from './types';
 import { api } from './api';
 import { VmCard } from './components/VmCard';
 import { NodeCard } from './components/NodeCard';
 import { PlanWizard } from './components/PlanWizard';
 import { AddConnectionModal } from './components/AddConnectionModal';
 import { MigrationPanel } from './components/MigrationPanel';
+import { ActivityFeed } from './components/ActivityFeed';
 
 interface DropTarget {
   vm: VM;
@@ -20,12 +22,12 @@ function arr<T>(v: T[] | null | undefined): T[] {
 }
 
 export default function App() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [inventory, setInventory] = useState<Record<string, InventoryRoot>>({});
   const [inventoryErrors, setInventoryErrors] = useState<Record<string, string>>({});
-  const [mode, setMode] = useState('unknown');
+  const [mode, setMode] = useState<'mock' | 'lab' | 'live' | 'production'>('mock');
   const [plans, setPlans] = useState<Plan[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [addModal, setAddModal] = useState<ConnRole | null>(null);
@@ -36,6 +38,8 @@ export default function App() {
     setLoading(true);
     setError('');
     try {
+      const runtime = await api.getRuntime();
+      setMode(runtime.mode);
       const conns = await api.listConnections();
       setConnections(conns);
       const inv: Record<string, InventoryRoot> = {};
@@ -52,13 +56,6 @@ export default function App() {
       setInventory(inv);
       setInventoryErrors(invErrors);
       setPlans(await api.listPlans());
-      setJobs(await api.listJobs());
-      try {
-        const health = await api.health();
-        setMode(health.mode);
-      } catch {
-        setMode('unknown');
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -67,15 +64,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void api.session().then(setSession).catch(() => setSession(null));
+  }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      void api.listJobs().then(setJobs).catch(() => undefined);
-    }, 3000);
-    return () => window.clearInterval(timer);
-  }, []);
+    if (session) void load();
+  }, [load, session]);
+
+  if (session === undefined) {
+    return <div className="app"><div className="empty" style={{ marginTop: 80 }}>Checking session...</div></div>;
+  }
+
+  if (session === null) {
+    return <Login onLogin={setSession} />;
+  }
 
   const sources = connections.filter((c) => c.role === 'source');
   const targets = connections.filter((c) => c.role === 'target');
@@ -114,12 +116,20 @@ export default function App() {
   return (
     <div className="app">
       <div className="topbar">
-        <img className="brand-logo" src="/drishti-hypershift-logo-v3.png" alt="DRISHTI HyperShift" />
+        <div className="brand">
+          <img src="/NOC-LOGO4.png" alt="DRISHTI" className="brand-logo" />
+          <div className="brand-title">
+            <h1>DRISHTI HyperShift</h1>
+            <span>VMware to Proxmox Migration</span>
+          </div>
+        </div>
         <span className="mode">{mode.toUpperCase()} MODE</span>
         <span style={{ flex: 1 }} />
+        <span className="meta">{session.user.name || session.user.id}</span>
         <button className="btn" onClick={() => void load()} disabled={loading}>
           {loading ? <span className="spinner" /> : 'Refresh'}
         </button>
+        <button className="btn" onClick={() => void api.logout().finally(() => setSession(null))}>Sign out</button>
       </div>
 
       <div className="banner">
@@ -140,6 +150,17 @@ export default function App() {
           </div>
           {sources.map((conn) => {
             const inv = inventory[conn.id];
+            const inventoryError = inventoryErrors[conn.id];
+            const vmCount = arr(inv?.datacenters).reduce(
+              (total, dc) => total + arr(dc.clusters).reduce(
+                (clusterTotal, cluster) => clusterTotal + arr(cluster.hosts).reduce(
+                  (hostTotal, host) => hostTotal + arr(host.vms).length,
+                  0,
+                ),
+                0,
+              ),
+              0,
+            );
             return (
               <div key={conn.id} className="panel">
                 <header>
@@ -178,9 +199,9 @@ export default function App() {
                       )),
                     ),
                   )}
-                  {inv && arr(inv.datacenters).length === 0 && <div className="empty">No VMs in this inventory.</div>}
-                  {inventoryErrors[conn.id] && <div className="error-text">{inventoryErrors[conn.id]}</div>}
-                  {!inv && !inventoryErrors[conn.id] && <div className="empty">Loading inventory...</div>}
+                  {inventoryError && <div className="error-text">{inventoryError}</div>}
+                  {inv && vmCount === 0 && <div className="empty">No virtual machines were returned. Check account permissions and confirm the VMs are registered on this host.</div>}
+                  {!inv && !inventoryError && <div className="empty">Loading inventory...</div>}
                 </div>
               </div>
             );
@@ -199,6 +220,7 @@ export default function App() {
           </div>
           {targets.map((conn) => {
             const inv = inventory[conn.id];
+            const inventoryError = inventoryErrors[conn.id];
             return (
               <div key={conn.id} className="panel">
                 <header>
@@ -222,9 +244,9 @@ export default function App() {
                   {arr(inv?.nodes).map((node) => (
                     <NodeCard key={node.id} node={node} onDrop={(n) => handleDrop(n, conn.id)} />
                   ))}
+                  {inventoryError && <div className="error-text">{inventoryError}</div>}
                   {inv && arr(inv.nodes).length === 0 && <div className="empty">No nodes in this inventory.</div>}
-                  {inventoryErrors[conn.id] && <div className="error-text">{inventoryErrors[conn.id]}</div>}
-                  {!inv && !inventoryErrors[conn.id] && <div className="empty">Loading inventory...</div>}
+                  {!inv && !inventoryError && <div className="empty">Loading inventory...</div>}
                 </div>
               </div>
             );
@@ -242,40 +264,13 @@ export default function App() {
               <MigrationPanel plans={plans} onRefresh={() => void load()} />
             </div>
           </div>
-          <h2 style={{ marginTop: 14 }}>Activity ({jobs.length})</h2>
+          <h2 style={{ marginTop: 14 }}>Activities</h2>
           <div className="panel">
-            <div className="body activity-list">
-              {jobs.map((job) => {
-                const plan = plans.find((item) => item.id === job.plan_id);
-                const message = job.steps[0]?.message ?? '';
-                const match = message.match(/([0-9]+(?:\.[0-9]+)?)%/);
-                const progress = match ? Math.min(100, Math.max(0, Number(match[1]))) : null;
-                return (
-                  <div className="activity-item" key={job.id}>
-                    <div className="activity-head">
-                      <span>{plan?.name ?? job.plan_id}</span>
-                      <span className={`badge ${job.state === 'succeeded' ? 'green' : job.state === 'failed' ? 'red' : 'amber'}`}>{job.state}</span>
-                    </div>
-                    <div className="meta">{plan?.source_vm_id ?? 'migration'} → VMID {plan?.target_vmid ?? 'pending'} on {plan?.target_node_id ?? 'target'}</div>
-                    {job.state === 'running' && progress !== null && (
-                      <div className="progress-wrap" aria-label={`Migration ${progress.toFixed(1)} percent complete`}>
-                        <div className="progress-bar"><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
-                        <span>{progress.toFixed(1)}%</span>
-                      </div>
-                    )}
-                    {job.steps.map((step, index) => (
-                      <div className="activity-step" key={step.id ?? `${job.id}-${index}`}>
-                        {step.name}: {step.state}{step.message ? ` — ${step.message}` : ''}
-                      </div>
-                    ))}
-                    <div className="meta">
-                      {job.started_at ? new Date(job.started_at).toLocaleString() : ''}
-                      {job.finished_at ? ` – ${new Date(job.finished_at).toLocaleString()}` : ''}
-                    </div>
-                  </div>
-                );
-              })}
-              {jobs.length === 0 && <div className="empty">No migration activity yet.</div>}
+            <div className="body">
+              <ActivityFeed
+                plans={plans}
+                canViewAudit={session.user.roles.some((role) => role === 'auditor' || role === 'platform_admin')}
+              />
             </div>
           </div>
         </div>
@@ -308,6 +303,40 @@ export default function App() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+function Login({ onLogin }: { onLogin: (session: Session) => void }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError('');
+    try {
+      onLogin(await api.login(username, password));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="app">
+      <div className="panel" style={{ width: 380, margin: '12vh auto 0' }}>
+        <header>Sign in to DRISHTI HyperShift</header>
+        <form className="body" onSubmit={(event) => void submit(event)}>
+          <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
+          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
+          {error && <div className="error-text">{error}</div>}
+          <button className="btn primary" type="submit" disabled={submitting}>{submitting ? 'Signing in...' : 'Sign in'}</button>
+        </form>
+      </div>
     </div>
   );
 }

@@ -22,8 +22,8 @@ const (
 	RoleTarget Role = "target"
 )
 
-// Connection is a configured, authenticated platform endpoint. Secrets are
-// referenced by SecretRef and never stored inline.
+// Connection is a configured, authenticated platform endpoint. SecretRef is
+// internal metadata and is deliberately excluded from API responses.
 type Connection struct {
 	ID          string       `json:"id"`
 	Name        string       `json:"name"`
@@ -32,7 +32,7 @@ type Connection struct {
 	Endpoint    string       `json:"endpoint"`
 	InsecureTLS bool         `json:"insecure_tls"`
 	Status      ConnStatus   `json:"status"`
-	SecretRef   string       `json:"secret_ref,omitempty"`
+	SecretRef   string       `json:"-"`
 	CreatedAt   time.Time    `json:"created_at"`
 	UpdatedAt   time.Time    `json:"updated_at"`
 }
@@ -216,26 +216,29 @@ type TargetVM struct {
 // Plan is a draft or approved migration plan. It is created by a drop and
 // never executes a migration by itself.
 type Plan struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	SourceVMID      string            `json:"source_vm_id"`
-	SourceConnID    string            `json:"source_connection_id"`
-	TargetNodeID    string            `json:"target_node_id"`
-	TargetConnID    string            `json:"target_connection_id"`
-	TargetVMName    string            `json:"target_vm_name"`
-	TargetVMID      *int              `json:"target_vmid,omitempty"`
-	CPU             int               `json:"cpu"`
-	MemoryMB        int64             `json:"memory_mb"`
-	Firmware        Firmware          `json:"firmware"`
-	StorageMaps     []StorageMap      `json:"storage_maps"`
-	NetworkMaps     []NetworkMap      `json:"network_maps"`
-	Status          PlanStatus        `json:"status"`
-	PreflightPassed bool              `json:"preflight_passed"`
-	DiskFormat      DiskFormat        `json:"disk_format"`
-	Strategy        MigrationStrategy `json:"strategy"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	CreatedBy       string            `json:"created_by"`
+	ID              string       `json:"id"`
+	Name            string       `json:"name"`
+	SourceVMID      string       `json:"source_vm_id"`
+	SourceConnID    string       `json:"source_connection_id"`
+	TargetNodeID    string       `json:"target_node_id"`
+	TargetConnID    string       `json:"target_connection_id"`
+	TargetVMName    string       `json:"target_vm_name"`
+	TargetVMID      *int         `json:"target_vmid,omitempty"`
+	CPU             int          `json:"cpu"`
+	MemoryMB        int64        `json:"memory_mb"`
+	Firmware        Firmware     `json:"firmware"`
+	StorageMaps     []StorageMap `json:"storage_maps"`
+	NetworkMaps     []NetworkMap `json:"network_maps"`
+	Status          PlanStatus   `json:"status"`
+	PreflightPassed bool         `json:"preflight_passed"`
+	// SourcePowerOffApproved is a separate approval to stop a running VMware
+	// source. It does not authorize any other source mutation.
+	SourcePowerOffApproved bool              `json:"source_power_off_approved"`
+	DiskFormat             DiskFormat        `json:"disk_format"`
+	Strategy               MigrationStrategy `json:"strategy"`
+	CreatedAt              time.Time         `json:"created_at"`
+	UpdatedAt              time.Time         `json:"updated_at"`
+	CreatedBy              string            `json:"created_by"`
 }
 
 // MigrationStrategy controls how guest state is transferred. Cold remains
@@ -301,6 +304,7 @@ const (
 type Job struct {
 	ID             string     `json:"id"`
 	PlanID         string     `json:"plan_id"`
+	Actor          string     `json:"actor"`
 	State          JobState   `json:"state"`
 	Steps          []JobStep  `json:"steps"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
@@ -311,17 +315,19 @@ type Job struct {
 type JobState string
 
 const (
-	JobPending    JobState = "pending"
-	JobRunning    JobState = "running"
-	JobSucceeded  JobState = "succeeded"
-	JobFailed     JobState = "failed"
-	JobCancelled  JobState = "cancelled"
-	JobRolledBack JobState = "rolled_back"
+	JobPending          JobState = "pending"
+	JobRunning          JobState = "running"
+	JobSucceeded        JobState = "succeeded"
+	JobFailed           JobState = "failed"
+	JobCancelled        JobState = "cancelled"
+	JobRollbackPrepared JobState = "rollback_prepared"
+	JobRolledBack       JobState = "rolled_back"
 )
 
 type JobStep struct {
 	ID         string     `json:"id"`
 	Name       string     `json:"name"`
+	Actor      string     `json:"actor"`
 	State      JobState   `json:"state"`
 	StartedAt  *time.Time `json:"started_at,omitempty"`
 	FinishedAt *time.Time `json:"finished_at,omitempty"`

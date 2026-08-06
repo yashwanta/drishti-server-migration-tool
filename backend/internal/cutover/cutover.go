@@ -20,9 +20,9 @@ func New() *Engine { return &Engine{} }
 
 // CutoverResult records the outcome of a cutover attempt.
 type CutoverResult struct {
-	Success    bool
-	Steps      []string
-	Warning    string
+	Success           bool
+	Steps             []string
+	Warning           string
 	RetentionDeadline time.Time
 }
 
@@ -73,16 +73,17 @@ func (e *Engine) Cutover(ctx context.Context, src platform.SourceAdapter, tgt pl
 
 // RollbackResult records the outcome of a rollback.
 type RollbackResult struct {
-	Success bool
-	Steps   []string
-	Warning string
+	Success              bool
+	ManualActionRequired bool
+	Steps                []string
+	Warning              string
 }
 
 // Rollback executes the rollback sequence:
 //  1. Isolate and power off the target.
 //  2. Confirm no duplicate identity can exist.
-//  3. Power on the retained source.
-//  4. Validate source health.
+//  3. Confirm the retained source remains registered and powered off.
+//  4. Require an authorized VMware operator to start and validate the source.
 func (e *Engine) Rollback(ctx context.Context, src platform.SourceAdapter, tgt platform.TargetAdapter, plan domain.Plan) (RollbackResult, error) {
 	var steps []string
 	vmid := 0
@@ -103,14 +104,20 @@ func (e *Engine) Rollback(ctx context.Context, src platform.SourceAdapter, tgt p
 	// Step 2: confirm no duplicate.
 	steps = append(steps, "Confirmed no duplicate production identity exists (target isolated and off).")
 
-	// Step 3: power on source.
-	if err := src.PowerOn(ctx, plan.SourceVMID); err != nil {
+	// Step 3: confirm the retained source remains present and off. DRISHTI never
+	// powers on a VMware source automatically.
+	sourceState, err := src.PowerState(ctx, plan.SourceVMID)
+	if err != nil {
 		return RollbackResult{Steps: steps, Warning: err.Error()}, err
 	}
-	steps = append(steps, "Retained source VM powered on.")
+	if sourceState != domain.PowerOff {
+		return RollbackResult{Steps: steps, Warning: "Retained source is not confirmed powered off; manual rollback refused."}, fmt.Errorf("source not powered off")
+	}
+	steps = append(steps, "Confirmed retained source VM remains registered and powered off.")
 
-	// Step 4: validate source health.
-	steps = append(steps, "Source VM health validated (powered on, network reachable).")
+	// Step 4: manual action is deliberate and audited by the API caller.
+	warning := "Manual action required: an authorized VMware operator must power on the retained source and validate its health."
+	steps = append(steps, warning)
 
-	return RollbackResult{Success: true, Steps: steps}, nil
+	return RollbackResult{Success: true, ManualActionRequired: true, Steps: steps, Warning: warning}, nil
 }

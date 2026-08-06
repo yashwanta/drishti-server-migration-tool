@@ -1,4 +1,5 @@
-// Package proxmox provides narrowly scoped, read-only Proxmox VE API access.
+// Package proxmox provides Proxmox VE inventory, preflight, and narrowly scoped
+// target operations guarded by explicit mutation policy.
 package proxmox
 
 import (
@@ -53,6 +54,19 @@ type apiClient struct {
 	http    *http.Client
 }
 
+type apiError struct {
+	Path       string
+	StatusCode int
+	Detail     string
+}
+
+func (e *apiError) Error() string {
+	if e.Detail == "" {
+		return fmt.Sprintf("Proxmox API %s returned HTTP %d", e.Path, e.StatusCode)
+	}
+	return fmt.Sprintf("Proxmox API %s returned HTTP %d: %s", e.Path, e.StatusCode, e.Detail)
+}
+
 func newAPIClient(conn domain.Connection) (*apiClient, error) {
 	endpoint, err := normalizeEndpoint(conn.Endpoint)
 	if err != nil {
@@ -100,10 +114,7 @@ func (c *apiClient) do(ctx context.Context, method, path string, body *strings.R
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 		detail := strings.TrimSpace(apiTokenRE.ReplaceAllString(string(message), "PVEAPIToken=[REDACTED]"))
-		if detail == "" {
-			return fmt.Errorf("Proxmox API %s returned HTTP %d", path, resp.StatusCode)
-		}
-		return fmt.Errorf("Proxmox API %s returned HTTP %d: %s", path, resp.StatusCode, detail)
+		return &apiError{Path: path, StatusCode: resp.StatusCode, Detail: detail}
 	}
 	var envelope struct {
 		Data json.RawMessage `json:"data"`

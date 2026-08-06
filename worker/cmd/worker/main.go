@@ -12,6 +12,8 @@ import (
 	"syscall"
 
 	"github.com/drishti/hypershift-worker/internal/config"
+	"github.com/drishti/hypershift-worker/internal/conversion"
+	"github.com/drishti/hypershift-worker/internal/runner"
 )
 
 func main() {
@@ -27,6 +29,12 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"status":"ok","service":"hypershift-worker"}`)
 	})
+	conversionService, err := conversion.New(cfg.WorkspaceRoot, cfg.MaxWorkspaceGB, runner.New(cfg.ConversionTimeout))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "worker: initialize conversion service: %v\n", err)
+		os.Exit(1)
+	}
+	conversion.NewHandler(conversionService, cfg.EnableConversion).Register(mux)
 
 	srv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

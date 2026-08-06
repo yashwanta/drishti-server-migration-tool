@@ -22,14 +22,92 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DBURL != "" {
 		t.Errorf("db url should be empty in mock, got %q", cfg.DBURL)
 	}
+	if cfg.WorkspaceRoot == "" {
+		t.Error("workspace root should have a safe temporary default")
+	}
 }
 
-func TestLoadRequiresDBInLabMode(t *testing.T) {
-	t.Setenv("DRISHTI_MODE", "lab")
+func TestLoadRequiresDBInEveryRealMode(t *testing.T) {
+	for _, mode := range []RunMode{ModeLab, ModeLive, ModeProduction} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Setenv("DRISHTI_MODE", string(mode))
+			t.Setenv("DRISHTI_DB_URL", "")
+			t.Setenv("DRISHTI_WORKER_URL", "http://worker.invalid:8090")
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected DB_URL requirement in %s mode", mode)
+			}
+		})
+	}
+}
+
+func TestLoadRequiresDBInProductionMode(t *testing.T) {
+	t.Setenv("DRISHTI_MODE", "production")
 	t.Setenv("DRISHTI_DB_URL", "")
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error requiring DB_URL in lab mode")
+	t.Setenv("DRISHTI_WORKER_URL", "http://worker.invalid:8090")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error requiring DB_URL in production mode")
+	}
+}
+
+func TestLoadRequiresWorkerInEveryRealMode(t *testing.T) {
+	for _, mode := range []RunMode{ModeLab, ModeLive, ModeProduction} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Setenv("DRISHTI_MODE", string(mode))
+			t.Setenv("DRISHTI_DB_URL", "postgres://example.invalid/drishti")
+			t.Setenv("DRISHTI_WORKER_URL", "")
+			if _, err := Load(); err == nil {
+				t.Fatalf("expected worker URL requirement in %s mode", mode)
+			}
+		})
+	}
+}
+
+func TestProductionRejectsPlatformMutation(t *testing.T) {
+	t.Setenv("DRISHTI_MODE", "production")
+	t.Setenv("DRISHTI_DB_URL", "postgres://example.invalid/drishti")
+	t.Setenv("DRISHTI_WORKER_URL", "http://worker.invalid:8090")
+	t.Setenv("DRISHTI_ENABLE_PLATFORM_MUTATION", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production platform mutation to be rejected")
+	}
+}
+
+func TestProductionRequiresSecureSessionCookie(t *testing.T) {
+	t.Setenv("DRISHTI_MODE", "production")
+	t.Setenv("DRISHTI_DB_URL", "postgres://example.invalid/drishti")
+	t.Setenv("DRISHTI_WORKER_URL", "http://worker.invalid:8090")
+	t.Setenv("DRISHTI_SESSION_SECURE", "false")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production to require secure session cookies")
+	}
+}
+
+func TestMutationDenylist(t *testing.T) {
+	t.Setenv("DRISHTI_MODE", "lab")
+	t.Setenv("DRISHTI_DB_URL", "postgres://example.invalid/drishti")
+	t.Setenv("DRISHTI_WORKER_URL", "http://worker.invalid:8090")
+	t.Setenv("DRISHTI_MUTATION_DENYLIST", "prod-vcenter.example, 10.0.0.2:443")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.MutationDenylist) != 2 {
+		t.Fatalf("denylist = %#v", cfg.MutationDenylist)
+	}
+}
+
+func TestProxmoxTargetSafetyConfiguration(t *testing.T) {
+	t.Setenv("DRISHTI_MODE", "lab")
+	t.Setenv("DRISHTI_DB_URL", "postgres://example.invalid/drishti")
+	t.Setenv("DRISHTI_WORKER_URL", "http://worker.invalid:8090")
+	t.Setenv("DRISHTI_PROXMOX_IMPORT_ROOT", "/mnt/drishti-import")
+	t.Setenv("DRISHTI_PROXMOX_ISOLATED_BRIDGES", "vmbr-lab, vmbr-quarantine")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProxmoxImportRoot != "/mnt/drishti-import" || len(cfg.ProxmoxIsolatedBridges) != 2 {
+		t.Fatalf("unexpected Proxmox safety config: %#v", cfg)
 	}
 }
 

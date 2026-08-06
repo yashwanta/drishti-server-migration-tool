@@ -5,8 +5,8 @@
 
 .DESCRIPTION
   Uses a Podman pod to host the backend, frontend, and worker containers on a
-  shared network. Backend runs in mock mode so no external DB or platform is
-  required for a smoke test.
+  shared network. Live mode enables the read-only VMware connector. Pass
+  -Mode mock to use generated sample inventory instead.
 
   Usage:
     .\scripts\podman-run.ps1 build   - build all images
@@ -19,7 +19,10 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet("build", "up", "down", "status", "logs", "test", "restart")]
-    [string]$Action = "up"
+    [string]$Action = "up",
+
+    [ValidateSet("mock", "lab", "live")]
+    [string]$Mode = "live"
 )
 
 $ErrorActionPreference = "Continue"
@@ -57,9 +60,9 @@ function Up {
     podman pod create --name $PodName -p 8180:8080 -p 5173:80 -p 8090:8090 2>$null | Out-Null
 
     Write-Host "Starting backend..." -ForegroundColor Cyan
-    $backendEnv = @("-e", "DRISHTI_MODE=mock")
+    $backendEnv = @("-e", "DRISHTI_MODE=$Mode")
     if (Test-Path ".env") {
-        $backendEnv = @("--env-file", ".env")
+        $backendEnv = @("--env-file", ".env", "-e", "DRISHTI_MODE=$Mode")
         Write-Host "  Loading backend configuration from .env" -ForegroundColor Yellow
     }
     podman run -d --pod $PodName --name $BackC @backendEnv `
@@ -76,6 +79,7 @@ function Up {
 
     Write-Host ""
     Write-Host "Stack is up:" -ForegroundColor Green
+	Write-Host "  Mode:      $Mode"
     Write-Host "  Frontend:  http://localhost:5173"
     Write-Host "  Backend:   http://localhost:8180"
     Write-Host "  Worker:    http://localhost:8090"

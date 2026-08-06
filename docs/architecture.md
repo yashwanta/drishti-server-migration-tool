@@ -56,7 +56,7 @@ React 18 + TypeScript (strict), Vite, no UI framework dependency.
 Module `github.com/drishti/hypershift-worker`. Go 1.25.
 
 - `cmd/worker/main.go` — worker entrypoint with `/healthz`.
-- `internal/cmdsafelist/` — fixed allowlist of executables (qemu-img, sha256sum). `rm`, `bash`, `curl`, etc. are rejected.
+- `internal/cmdsafelist/` — fixed allowlist containing only the typed qemu-img conversion operation. Checksums are streamed in Go; `rm`, `bash`, `curl`, arbitrary qemu-img operations, etc. are rejected.
 - `internal/runner/` — executes allowlisted binaries with validated argument arrays. No shell, no metacharacters.
 
 ## API

@@ -20,7 +20,7 @@ func TestRunRejectsUnknownCommand(t *testing.T) {
 
 func TestRunRejectsMetachars(t *testing.T) {
 	r := New(5 * time.Second)
-	_, err := r.Run(context.Background(), "qemu-img", []string{"info; rm -rf /"})
+	_, err := r.Run(context.Background(), "qemu-img", []string{"convert", "-f", "vmdk", "-O", "qcow2", "info; rm -rf /", "/tmp/out"})
 	if err == nil {
 		t.Fatal("expected error for argument with metachar")
 	}

@@ -6,12 +6,12 @@ package rbac
 type Role string
 
 const (
-	RoleViewer       Role = "viewer"
-	RolePlanner      Role = "planner"
-	RoleOperator     Role = "operator"
-	RoleApprover     Role = "approver"
+	RoleViewer        Role = "viewer"
+	RolePlanner       Role = "planner"
+	RoleOperator      Role = "operator"
+	RoleApprover      Role = "approver"
 	RolePlatformAdmin Role = "platform_admin"
-	RoleAuditor      Role = "auditor"
+	RoleAuditor       Role = "auditor"
 )
 
 // Action is a permission verb.
@@ -27,14 +27,15 @@ const (
 	ActionRollback     Action = "rollback"
 	ActionCleanup      Action = "cleanup"
 	ActionManageConn   Action = "manage_connections"
+	ActionViewAudit    Action = "view_audit"
 )
 
 // User represents an authenticated operator.
 type User struct {
-	ID    string
-	Name  string
-	Email string
-	Roles []Role
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Roles []Role `json:"roles"`
 }
 
 // permissions maps role -> allowed actions.
@@ -43,8 +44,8 @@ var permissions = map[Role][]Action{
 	RolePlanner:       {ActionView, ActionCreatePlan, ActionDeletePlan, ActionRunPreflight},
 	RoleOperator:      {ActionView, ActionCreatePlan, ActionRunPreflight, ActionExecute},
 	RoleApprover:      {ActionView, ActionApprove, ActionRollback},
-	RolePlatformAdmin: {ActionView, ActionCreatePlan, ActionDeletePlan, ActionRunPreflight, ActionExecute, ActionApprove, ActionRollback, ActionCleanup, ActionManageConn},
-	RoleAuditor:       {ActionView},
+	RolePlatformAdmin: {ActionView, ActionCreatePlan, ActionDeletePlan, ActionRunPreflight, ActionExecute, ActionApprove, ActionRollback, ActionCleanup, ActionManageConn, ActionViewAudit},
+	RoleAuditor:       {ActionView, ActionViewAudit},
 }
 
 // Can reports whether the user may perform the action.
@@ -57,9 +58,4 @@ func (u User) Can(action Action) bool {
 		}
 	}
 	return false
-}
-
-// MockUser returns a default admin user for mock/dev mode (no auth).
-func MockUser() User {
-	return User{ID: "mock-user", Name: "Mock Operator", Email: "mock@local", Roles: []Role{RolePlatformAdmin}}
 }

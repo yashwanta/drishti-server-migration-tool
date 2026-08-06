@@ -20,7 +20,15 @@ This project migrates production virtual machines. The following invariants are 
 ## Secrets Handling
 
 - Secrets are **referenced by `SecretRef`**, never stored inline in the database or config files.
+- Lab and live read-only modes also accept direct platform credentials. The password is sent only
+  to the backend, held in process memory for the connection session, excluded
+  from API responses, and discarded when the connection is removed or the
+  backend restarts. Use localhost or a TLS-terminated deployment for this mode.
 - The structured logger (`internal/logging`) redacts known-sensitive keys and connection strings with embedded credentials.
+- Operator passwords are accepted only as bcrypt hashes in the protected auth
+  users file. Session identifiers are random, stored server-side only as
+  SHA-256 digests, delivered in HttpOnly SameSite=Strict cookies, and never logged.
+- Every state-changing authenticated request requires a per-session CSRF token.
 - `.gitignore` blocks `.env`, `*.pem`, `*.key`, and `secrets/`.
 - Phase 9 will add an encrypted secrets provider / pluggable secrets-provider interface.
 

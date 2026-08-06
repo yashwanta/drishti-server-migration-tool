@@ -29,7 +29,8 @@ func (e *Engine) Run(plan domain.Plan, vm domain.VM, node domain.TargetNode) Res
 	var checks []domain.PreflightCheck
 	var blocked []string
 
-	// Check 1: power state (cold migration requires source off).
+	// Check 1: a running source is allowed to reach approval only as a warning;
+	// execution still requires a separate, VM-bound power-off approval.
 	power := checkPowerState(vm)
 	checks = append(checks, power)
 	if power.Status == domain.CheckFail {
@@ -67,9 +68,13 @@ func (e *Engine) Run(plan domain.Plan, vm domain.VM, node domain.TargetNode) Res
 	tools := checkToolsStatus(vm)
 	checks = append(checks, tools)
 
-	// Check 7: snapshot presence (warning).
+	// Check 7: snapshot presence. Export refuses delta chains and DRISHTI never
+	// consolidates VMware snapshots automatically.
 	snap := checkSnapshots(vm)
 	checks = append(checks, snap)
+	if snap.Status == domain.CheckFail {
+		blocked = append(blocked, snap.Message)
+	}
 
 	// Check 8: target node online.
 	online := checkNodeOnline(node)
@@ -83,14 +88,21 @@ func (e *Engine) Run(plan domain.Plan, vm domain.VM, node domain.TargetNode) Res
 }
 
 func checkPowerState(vm domain.VM) domain.PreflightCheck {
-	if vm.PowerState != domain.PowerOff {
+	switch vm.PowerState {
+	case domain.PowerOff:
+		return domain.PreflightCheck{Code: "POWER_STATE", Severity: domain.SeverityInfo, Status: domain.CheckPass,
+			Message: "Source VM is powered off and ready for cold migration."}
+	case domain.PowerOn:
+		return domain.PreflightCheck{
+			Code: "POWER_STATE", Severity: domain.SeverityWarning, Status: domain.CheckWarn,
+			Message: fmt.Sprintf("VM %s is powered on. Execution requires separate approval to power off this exact source VM.", vm.Name),
+		}
+	default:
 		return domain.PreflightCheck{
 			Code: "POWER_STATE", Severity: domain.SeverityError, Status: domain.CheckFail,
-			Message: fmt.Sprintf("VM %s is %s. Cold migration requires the source to be powered off.", vm.Name, vm.PowerState),
+			Message: fmt.Sprintf("VM %s is %s. Cold migration cannot proceed from this power state.", vm.Name, vm.PowerState),
 		}
 	}
-	return domain.PreflightCheck{Code: "POWER_STATE", Severity: domain.SeverityInfo, Status: domain.CheckPass,
-		Message: "Source VM is powered off and ready for cold migration."}
 }
 
 func checkCapacity(vm domain.VM, node domain.TargetNode) domain.PreflightCheck {
@@ -164,8 +176,8 @@ func checkToolsStatus(vm domain.VM) domain.PreflightCheck {
 
 func checkSnapshots(vm domain.VM) domain.PreflightCheck {
 	if len(vm.Snapshots) > 0 {
-		return domain.PreflightCheck{Code: "SNAPSHOTS", Severity: domain.SeverityWarning, Status: domain.CheckWarn,
-			Message: fmt.Sprintf("VM has %d snapshot(s). The disk export will include the current snapshot chain.", len(vm.Snapshots))}
+		return domain.PreflightCheck{Code: "SNAPSHOTS", Severity: domain.SeverityError, Status: domain.CheckFail,
+			Message: fmt.Sprintf("VM has %d snapshot(s). Consolidate them manually before export; DRISHTI never removes or consolidates VMware snapshots.", len(vm.Snapshots))}
 	}
 	return domain.PreflightCheck{Code: "SNAPSHOTS", Severity: domain.SeverityInfo, Status: domain.CheckPass,
 		Message: "No snapshots; disk export is straightforward."}

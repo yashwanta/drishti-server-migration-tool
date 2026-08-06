@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drishti/hypershift/internal/config"
 	"github.com/drishti/hypershift/internal/domain"
 	"github.com/drishti/hypershift/internal/mock"
 )
@@ -66,6 +67,42 @@ func TestCreateConnection(t *testing.T) {
 	}
 	if conn.Status != domain.ConnConnected {
 		t.Errorf("status = %q, want connected", conn.Status)
+	}
+}
+
+func TestConnectionResponseNeverContainsCredentials(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	body := `{"kind":"vmware","role":"source","endpoint":"safe.example.local","username":"root","password":"super-secret","secret_ref":"vault/item"}`
+	w := do(t, mux, "POST", "/api/v1/connections", body)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	response := w.Body.String()
+	for _, forbidden := range []string{"super-secret", "vault/item", "secret_ref", "password"} {
+		if strings.Contains(response, forbidden) {
+			t.Fatalf("connection response leaked %q: %s", forbidden, response)
+		}
+	}
+}
+
+func TestProbeExplainsMockMode(t *testing.T) {
+	_, mux := newTestHandlers(t)
+	w := do(t, mux, "POST", "/api/v1/connections/probe", `{"kind":"vmware","role":"source","endpoint":"esxi.local","username":"root","password":"secret"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "does not contact") {
+		t.Fatalf("mock probe message was misleading: %s", w.Body.String())
+	}
+}
+
+func TestLabConnectionRequiresDirectCredentials(t *testing.T) {
+	h := NewHandlersWithMode(mock.NewEmpty(), NewPlanStore(), NewAuditStore(), config.ModeLab)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	w := do(t, mux, "POST", "/api/v1/connections", `{"kind":"vmware","role":"source","endpoint":"esxi.local"}`)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 }
 
