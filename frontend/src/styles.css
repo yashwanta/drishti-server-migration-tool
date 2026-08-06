@@ -28,18 +28,36 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 12px 20px;
+  padding: 8px 20px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
 
 .topbar h1 { font-size: 16px; margin: 0; letter-spacing: 0.3px; }
+.brand-logo {
+  display: block;
+  width: 300px;
+  height: 72px;
+  object-fit: contain;
+  object-position: left center;
+  background: var(--panel);
+  mix-blend-mode: lighten;
+  margin-right: -80px;
+}
 .topbar .mode {
   font-size: 12px;
   padding: 3px 8px;
   border-radius: 4px;
   background: var(--accent-dim);
   color: #cfe0ff;
+}
+
+@media (max-width: 700px) {
+  .brand-logo {
+    width: 220px;
+    height: 56px;
+    margin-right: -48px;
+  }
 }
 
 .banner {
@@ -111,6 +129,19 @@ body {
 .node-card.offline { opacity: 0.5; }
 .node-card .name { font-weight: 700; font-size: 15px; }
 .node-card .caps { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.target-vms { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.target-vms-title { color: var(--text); font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+.target-vm { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 8px; margin-top: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.target-vm-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.target-vm .caps { grid-column: 1 / -1; margin: 0; }
+.activity-item { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.activity-item:last-child { border-bottom: 0; }
+.activity-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; }
+.activity-item .meta { color: var(--muted); font-size: 11px; margin-top: 5px; }
+.activity-step { color: var(--muted); font-size: 11px; margin-top: 5px; overflow-wrap: anywhere; }
+.progress-wrap { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--text); font-size: 11px; }
+.progress-bar { flex: 1; height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.progress-fill { height: 100%; border-radius: inherit; background: var(--accent); transition: width 0.4s ease; }
 
 .badge {
   display: inline-block;

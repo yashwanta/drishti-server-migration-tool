@@ -23,23 +23,23 @@ func NewState() *State { return &State{jobs: map[string]*Job{}} }
 
 type Job struct {
 	domain.Job
-	Steps []Step `json:"steps"`
+	Steps []Step   `json:"steps"`
 	log   []string `json:"-"`
 }
 
 type Step struct {
-	Name       string         `json:"name"`
+	Name       string          `json:"name"`
 	State      domain.JobState `json:"state"`
-	StartedAt  *time.Time     `json:"started_at,omitempty"`
-	FinishedAt *time.Time     `json:"finished_at,omitempty"`
-	Message    string         `json:"message"`
+	StartedAt  *time.Time      `json:"started_at,omitempty"`
+	FinishedAt *time.Time      `json:"finished_at,omitempty"`
+	Message    string          `json:"message"`
 }
 
 type Engine struct {
-	state   *State
-	factory platform.AdapterFactory
-	workDir string
-	audit   func(domain.AuditEvent)
+	state    *State
+	factory  platform.AdapterFactory
+	workDir  string
+	audit    func(domain.AuditEvent)
 	savePlan PlanSaver
 }
 
@@ -135,7 +135,9 @@ func (e *Engine) ExecutePlan(ctx context.Context, plan domain.Plan, vm domain.VM
 		return j, e.fail(j, fmt.Errorf("reserve vmid: %w", err))
 	}
 	plan.TargetVMID = &vmid
-	if e.savePlan != nil { e.savePlan(plan) }
+	if e.savePlan != nil {
+		e.savePlan(plan)
+	}
 
 	// Step: create target VM (initially isolated)
 	e.runStep(j, "create_target_vm", func() error {
@@ -223,4 +225,58 @@ func (e *Engine) runStep(j *Job, name string, fn func() error) {
 			return
 		}
 	}
+}
+
+// StartExternal records a Proxmox-managed asynchronous migration task.
+func (e *Engine) StartExternal(plan domain.Plan, externalID string) *Job {
+	now := time.Now().UTC()
+	stepName := "proxmox_remote_migration"
+	detail := "Offline Proxmox remote migration started; source deletion disabled."
+	if plan.Strategy == domain.MigrationStrategyPVELive {
+		stepName = "proxmox_live_migration"
+		detail = "Live Proxmox remote migration started in lab mode; source deletion disabled."
+	}
+	j := &Job{Job: domain.Job{ID: "job-" + plan.ID, PlanID: plan.ID, State: domain.JobRunning, StartedAt: &now, IdempotencyKey: plan.ID}, Steps: []Step{{Name: stepName, State: domain.JobRunning, StartedAt: &now, Message: "Proxmox task " + externalID}}}
+	e.state.mu.Lock()
+	e.state.jobs[j.ID] = j
+	e.state.mu.Unlock()
+	e.audit(domain.AuditEvent{ID: "evt-" + plan.ID + "-remote", Timestamp: now, Actor: "operator", Action: "job.remote_migration", Target: j.ID, Result: "running", Detail: detail})
+	return j
+}
+
+// FinishExternal records the terminal state of an asynchronous Proxmox task.
+func (e *Engine) FinishExternal(jobID string, taskErr error) {
+	e.state.mu.Lock()
+	defer e.state.mu.Unlock()
+	j := e.state.jobs[jobID]
+	if j == nil {
+		return
+	}
+	now := time.Now().UTC()
+	j.FinishedAt = &now
+	if taskErr != nil {
+		j.State = domain.JobFailed
+		j.Steps[0].State = domain.JobFailed
+		j.Steps[0].Message = taskErr.Error()
+	} else {
+		j.State = domain.JobSucceeded
+		j.Steps[0].State = domain.JobSucceeded
+		if j.Steps[0].Name == "proxmox_live_migration" {
+			j.Steps[0].Message = "live migration completed; target is running and retained source must remain stopped"
+		} else {
+			j.Steps[0].Message = "completed; source retained and target remains powered off"
+		}
+	}
+	j.Steps[0].FinishedAt = &now
+}
+
+// UpdateExternal records safe, user-facing progress for an active platform task.
+func (e *Engine) UpdateExternal(jobID, message string) {
+	e.state.mu.Lock()
+	defer e.state.mu.Unlock()
+	j := e.state.jobs[jobID]
+	if j == nil || j.State != domain.JobRunning || len(j.Steps) == 0 {
+		return
+	}
+	j.Steps[0].Message = message
 }

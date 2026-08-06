@@ -9,6 +9,7 @@ export type Firmware = 'bios' | 'uefi';
 export type GuestFamily = 'linux' | 'windows' | 'other';
 export type DiskFormat = 'vmdk' | 'raw' | 'qcow2';
 export type PlanStatus = 'draft' | 'preflight' | 'approved' | 'rejected' | 'archived';
+export type MigrationStrategy = 'cold' | 'pve-live' | 'warm';
 export type Severity = 'info' | 'warning' | 'error';
 export type CheckStatus = 'pass' | 'fail' | 'warn' | 'skipped';
 export type JobState = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'rolled_back';
@@ -170,7 +171,9 @@ export interface Plan {
   storage_maps: StorageMap[];
   network_maps: NetworkMap[];
   status: PlanStatus;
+  preflight_passed: boolean;
   disk_format: DiskFormat;
+  strategy: MigrationStrategy;
   created_at: string;
   updated_at: string;
   created_by: string;
@@ -221,12 +224,12 @@ export interface RollbackResult {
 }
 
 export interface Job {
-  ID: string;
-  PlanID: string;
+  id: string;
+  plan_id: string;
   state: JobState;
-  steps?: { Name: string; State: JobState; Message: string; StartedAt?: string; FinishedAt?: string }[];
-  StartedAt?: string;
-  FinishedAt?: string;
+  steps: { id?: string; name: string; state: JobState; message?: string; started_at?: string; finished_at?: string }[];
+  started_at?: string;
+  finished_at?: string;
 }
 
 export interface ApiError {

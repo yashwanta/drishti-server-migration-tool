@@ -14,6 +14,7 @@ import (
 	"github.com/drishti/hypershift/internal/job"
 	"github.com/drishti/hypershift/internal/logging"
 	"github.com/drishti/hypershift/internal/mock"
+	"github.com/drishti/hypershift/internal/platform/proxmox"
 	"github.com/drishti/hypershift/internal/server"
 )
 
@@ -42,9 +43,15 @@ func run() error {
 	defer stop()
 
 	provider := mock.New()
+	if cfg.Mode != config.ModeMock {
+		provider = mock.NewEmpty()
+	}
 	plans := api.NewPlanStore()
 	audit := api.NewAuditStore()
 	handlers := api.NewHandlers(provider, plans, audit)
+	if cfg.Mode == config.ModeLab {
+		handlers = api.NewHandlersWithProbe(provider, plans, audit, proxmox.NewProbe())
+	}
 
 	// Wire migration lifecycle: job engine + mock adapter factory.
 	workDir := os.TempDir()
@@ -55,6 +62,12 @@ func run() error {
 	})
 	jobEng.SetPlanSaver(func(p domain.Plan) { plans.Put(p) })
 	mh := api.NewMigrationHandlers(handlers, jobEng, factory, workDir)
+	if cfg.Mode != config.ModeMock {
+		mh.DisableExecution()
+	}
+	if cfg.Mode == config.ModeLab {
+		mh.EnableLabRemoteMigration(proxmox.NewProbe(), cfg.EnableLabMigration)
+	}
 
 	srv := server.New(cfg, log)
 	handlers.Register(srv.Router())

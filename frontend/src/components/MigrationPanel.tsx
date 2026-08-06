@@ -36,6 +36,7 @@ export function MigrationPanel({ plans, onRefresh }: Props) {
           <div className="meta" style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 6 }}>
             {p.source_vm_id} {'->'} {p.target_node_id} -{' '}
             <span className={('badge ' + (p.status === 'approved' ? 'green' : p.status === 'draft' ? 'amber' : ''))}>{p.status}</span>
+            {' '}<span className="badge">{p.strategy === 'pve-live' ? 'live' : 'cold'}</span>
           </div>
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             <button
@@ -49,7 +50,7 @@ export function MigrationPanel({ plans, onRefresh }: Props) {
             <button
               className="btn"
               style={{ padding: '3px 8px', fontSize: 11 }}
-              disabled={busy.length > 0 || p.status !== 'preflight'}
+              disabled={busy.length > 0 || p.status !== 'preflight' || !p.preflight_passed}
               onClick={() => act('Approve', p.id, () => api.approvePlan(p.id))}
             >
               Approve
