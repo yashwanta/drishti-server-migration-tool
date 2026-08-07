@@ -44,11 +44,6 @@ func run() error {
 	if cfg.Mode == config.ModeMock {
 		log.Info("running in MOCK mode: no platform connections will be attempted")
 	}
-	authService, err := auth.LoadUsers(cfg.AuthUsersFile, cfg.SessionTTL, cfg.SessionSecure)
-	if err != nil {
-		return fmt.Errorf("initialize authentication: %w", err)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -59,10 +54,11 @@ func run() error {
 	plans := api.NewPlanStore()
 	audit := api.NewAuditStore()
 	jobState := job.NewState()
+	var database *store.Postgres
 	if cfg.Mode != config.ModeMock {
 		databaseContext, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		database, err := store.OpenPostgres(databaseContext, cfg.DBURL)
+		database, err = store.OpenPostgres(databaseContext, cfg.DBURL)
 		if err != nil {
 			return fmt.Errorf("initialize durable store: %w", err)
 		}
@@ -70,6 +66,49 @@ func run() error {
 		plans = api.NewPersistentPlanStore(database)
 		audit = api.NewPersistentAuditStore(database)
 		jobState = job.NewPersistentState(database)
+	}
+
+	var userStore auth.UserStore
+	if cfg.Mode == config.ModeMock {
+		seed, err := auth.LoadUserRecords(cfg.AuthUsersFile)
+		if err != nil {
+			return fmt.Errorf("load mock authentication users: %w", err)
+		}
+		records, err := auth.RecordsFromCredentials(seed, time.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("validate mock authentication users: %w", err)
+		}
+		userStore, err = auth.NewMemoryUserStore(records, audit.AppendContext)
+		if err != nil {
+			return fmt.Errorf("initialize mock authentication users: %w", err)
+		}
+	} else {
+		count, err := database.CountUsers(ctx)
+		if err != nil {
+			return fmt.Errorf("count durable authentication users: %w", err)
+		}
+		if count == 0 {
+			seed, err := auth.LoadUserRecords(cfg.AuthUsersFile)
+			if err != nil {
+				return fmt.Errorf("load first-run authentication bootstrap: %w", err)
+			}
+			records, err := auth.RecordsFromCredentials(seed, time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("validate authentication bootstrap: %w", err)
+			}
+			imported, err := database.BootstrapUsers(ctx, records)
+			if err != nil {
+				return fmt.Errorf("bootstrap durable authentication users: %w", err)
+			}
+			if imported {
+				log.Info("imported first-run authentication users into PostgreSQL")
+			}
+		}
+		userStore = database
+	}
+	authService, err := auth.NewWithStore(userStore, cfg.SessionTTL, cfg.SessionSecure)
+	if err != nil {
+		return fmt.Errorf("initialize authentication: %w", err)
 	}
 	creds := credential.NewMemory()
 	handlers := api.NewHandlersWithRuntime(provider, plans, audit, cfg.Mode, nil, creds)

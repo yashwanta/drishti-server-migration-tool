@@ -15,14 +15,14 @@ authorization, pending a separate lab qualification and readiness review.
 rollback) runs end-to-end but does not touch real VMs. This is intentional for
 safe development and pilot rehearsal.
 
-### Authentication users and sessions are process-local
+### Authentication sessions are process-local
 Session authentication and route-level RBAC are enforced. User definitions are
-loaded from a protected bcrypt-hash file and active server-side sessions are
-process-local, so a backend restart signs every operator out.
+durable in PostgreSQL in lab/live/production and memory-backed in mock mode.
+Active server-side sessions remain process-local, so a backend restart signs
+every operator out.
 
-**Impact:** Deployments must provision the users file securely and operators
-must sign in again after a backend restart. There is no external identity
-provider, MFA, or distributed session store yet.
+**Impact:** Operators must sign in again after a backend restart. There is no
+external identity provider, MFA, or distributed session store yet.
 
 ### Connection registry and direct credentials remain process-local
 Plans, jobs, ordered job steps, and audit events use PostgreSQL in lab, live,

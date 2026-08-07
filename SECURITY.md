@@ -25,8 +25,11 @@ This project migrates production virtual machines. The following invariants are 
   from API responses, and discarded when the connection is removed or the
   backend restarts. Use localhost or a TLS-terminated deployment for this mode.
 - The structured logger (`internal/logging`) redacts known-sensitive keys and connection strings with embedded credentials.
-- Operator passwords are accepted only as bcrypt hashes in the protected auth
-  users file. Session identifiers are random, stored server-side only as
+- Operator passwords are stored only as bcrypt hashes. Mock mode reads them
+  from the protected auth users file; lab/live/production import that file only
+  into an empty PostgreSQL users table and use PostgreSQL authoritatively after
+  the first import. Runtime password plaintext is accepted only by bounded auth
+  requests and is never logged, audited, stored, or returned. Session identifiers are random, stored server-side only as
   SHA-256 digests, delivered in HttpOnly SameSite=Strict cookies, and never logged.
 - Every state-changing authenticated request requires a per-session CSRF token.
 - `.gitignore` blocks `.env`, `*.pem`, `*.key`, and `secrets/`.

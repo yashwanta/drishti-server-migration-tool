@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
 import type { Connection, InventoryRoot, Plan, TargetNode, VM, ConnRole, PlatformKind, Session } from './types';
 import { api } from './api';
 import { VmCard } from './components/VmCard';
@@ -8,6 +7,8 @@ import { PlanWizard } from './components/PlanWizard';
 import { AddConnectionModal } from './components/AddConnectionModal';
 import { MigrationPanel } from './components/MigrationPanel';
 import { ActivityFeed } from './components/ActivityFeed';
+import { LoginPanel } from './components/LoginPanel';
+import { UserManagementPanel } from './components/UserManagementPanel';
 
 interface DropTarget {
   vm: VM;
@@ -71,14 +72,6 @@ export default function App() {
     if (session) void load();
   }, [load, session]);
 
-  if (session === undefined) {
-    return <div className="app"><div className="empty" style={{ marginTop: 80 }}>Checking session...</div></div>;
-  }
-
-  if (session === null) {
-    return <Login onLogin={setSession} />;
-  }
-
   const sources = connections.filter((c) => c.role === 'source');
   const targets = connections.filter((c) => c.role === 'target');
 
@@ -112,6 +105,14 @@ export default function App() {
       setError(e instanceof Error ? e.message : String(e));
     }
   };
+
+  if (session === undefined) {
+    return <div className="app"><div className="empty" style={{ marginTop: 80 }}>Checking session...</div></div>;
+  }
+
+  if (session === null) {
+    return <LoginPanel onLogin={setSession} />;
+  }
 
   return (
     <div className="app">
@@ -273,6 +274,12 @@ export default function App() {
               />
             </div>
           </div>
+          {session.user.roles.includes('platform_admin') && (
+            <>
+              <h2 style={{ marginTop: 14 }}>User Management</h2>
+              <div className="panel"><div className="body"><UserManagementPanel currentUserID={session.user.id} /></div></div>
+            </>
+          )}
         </div>
       </div>
 
@@ -303,40 +310,6 @@ export default function App() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-function Login({ onLogin }: { onLogin: (session: Session) => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setSubmitting(true);
-    setError('');
-    try {
-      onLogin(await api.login(username, password));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="app">
-      <div className="panel" style={{ width: 380, margin: '12vh auto 0' }}>
-        <header>Sign in to DRISHTI HyperShift</header>
-        <form className="body" onSubmit={(event) => void submit(event)}>
-          <label>Username<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required /></label>
-          <label>Password<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required /></label>
-          {error && <div className="error-text">{error}</div>}
-          <button className="btn primary" type="submit" disabled={submitting}>{submitting ? 'Signing in...' : 'Sign in'}</button>
-        </form>
-      </div>
     </div>
   );
 }

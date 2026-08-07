@@ -31,7 +31,8 @@ type Config struct {
 	// LogLevel controls structured log verbosity.
 	LogLevel string
 
-	// AuthUsersFile contains bcrypt password hashes and RBAC role assignments.
+	// AuthUsersFile seeds mock mode and bootstraps an empty real-mode users
+	// table once. PostgreSQL is authoritative after that first import.
 	AuthUsersFile string
 	SessionTTL    time.Duration
 	SessionSecure bool

@@ -47,7 +47,7 @@ type session struct {
 // Raw session tokens exist only in the HttpOnly cookie.
 type Service struct {
 	mu        sync.RWMutex
-	users     map[string]UserCredential
+	users     UserStore
 	sessions  map[[32]byte]session
 	ttl       time.Duration
 	secure    bool
@@ -57,8 +57,17 @@ type Service struct {
 
 // LoadUsers loads bcrypt password hashes and RBAC roles from a protected JSON file.
 func LoadUsers(path string, ttl time.Duration, secure bool) (*Service, error) {
+	records, err := LoadUserRecords(path)
+	if err != nil {
+		return nil, err
+	}
+	return New(records, ttl, secure)
+}
+
+// LoadUserRecords reads and validates the protected JSON seed/bootstrap file.
+func LoadUserRecords(path string) ([]UserCredential, error) {
 	if strings.TrimSpace(path) == "" {
-		return nil, errors.New("DRISHTI_AUTH_USERS_FILE is required")
+		return nil, errors.New("DRISHTI_AUTH_USERS_FILE is required for mock mode or first database bootstrap")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -68,42 +77,40 @@ func LoadUsers(path string, ttl time.Duration, secure bool) (*Service, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, fmt.Errorf("decode auth users file: %w", err)
 	}
-	return New(file.Users, ttl, secure)
+	if len(file.Users) == 0 {
+		return nil, errors.New("auth users file must contain at least one user")
+	}
+	return file.Users, nil
 }
 
 // New creates a service from already-loaded records. It is exported for tests
 // and controlled embedding; production startup uses LoadUsers.
 func New(records []UserCredential, ttl time.Duration, secure bool) (*Service, error) {
+	stored, err := RecordsFromCredentials(records, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	memory, err := NewMemoryUserStore(stored, nil)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithStore(memory, ttl, secure)
+}
+
+// NewWithStore creates the authentication service around the selected runtime
+// repository. PostgreSQL is supplied in real modes; mock mode supplies memory.
+func NewWithStore(users UserStore, ttl time.Duration, secure bool) (*Service, error) {
 	if ttl <= 0 {
 		return nil, errors.New("session TTL must be positive")
+	}
+	if users == nil {
+		return nil, errors.New("user store is required")
 	}
 	dummyHash, err := bcrypt.GenerateFromPassword([]byte("invalid-login-sentinel"), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("initialize password verifier: %w", err)
 	}
-	s := &Service{users: make(map[string]UserCredential), sessions: make(map[[32]byte]session), ttl: ttl, secure: secure, now: time.Now, dummyHash: dummyHash}
-	for _, record := range records {
-		username := strings.ToLower(strings.TrimSpace(record.Username))
-		if username == "" || record.ID == "" || len(record.Roles) == 0 {
-			return nil, errors.New("every auth user requires id, username, password_hash, and at least one role")
-		}
-		if _, exists := s.users[username]; exists {
-			return nil, fmt.Errorf("duplicate auth username %q", username)
-		}
-		if _, err := bcrypt.Cost([]byte(record.PasswordHash)); err != nil {
-			return nil, fmt.Errorf("user %q has an invalid bcrypt password hash", username)
-		}
-		for _, role := range record.Roles {
-			if !validRole(role) {
-				return nil, fmt.Errorf("user %q has unknown role %q", username, role)
-			}
-		}
-		record.Username = username
-		s.users[username] = record
-	}
-	if len(s.users) == 0 {
-		return nil, errors.New("auth users file must contain at least one user")
-	}
+	s := &Service{users: users, sessions: make(map[[32]byte]session), ttl: ttl, secure: secure, now: time.Now, dummyHash: dummyHash}
 	return s, nil
 }
 
@@ -128,13 +135,16 @@ func tokenKey(raw string) [32]byte { return sha256.Sum256([]byte(raw)) }
 
 // Login validates a password and creates a fresh server-side session.
 func (s *Service) Login(username, password string) (string, string, rbac.User, error) {
-	record, ok := s.users[strings.ToLower(strings.TrimSpace(username))]
+	record, ok, storeErr := s.users.FindUserByUsername(context.Background(), username)
+	if storeErr != nil {
+		return "", "", rbac.User{}, fmt.Errorf("lookup user: %w", storeErr)
+	}
 	hash := s.dummyHash
 	if ok {
 		hash = []byte(record.PasswordHash)
 	}
 	passwordErr := bcrypt.CompareHashAndPassword(hash, []byte(password))
-	if !ok || passwordErr != nil {
+	if !ok || !record.Active || passwordErr != nil {
 		return "", "", rbac.User{}, ErrInvalidCredentials
 	}
 	token, err := randomToken()
@@ -146,9 +156,10 @@ func (s *Service) Login(username, password string) (string, string, rbac.User, e
 		return "", "", rbac.User{}, fmt.Errorf("generate CSRF token: %w", err)
 	}
 	s.mu.Lock()
-	s.sessions[tokenKey(token)] = session{User: record.User, CSRFToken: csrf, ExpiresAt: s.now().Add(s.ttl)}
+	user := record.sessionUser()
+	s.sessions[tokenKey(token)] = session{User: user, CSRFToken: csrf, ExpiresAt: s.now().Add(s.ttl)}
 	s.mu.Unlock()
-	return token, csrf, record.User, nil
+	return token, csrf, user, nil
 }
 
 func (s *Service) lookup(raw string) (session, bool) {
@@ -172,6 +183,16 @@ func (s *Service) delete(raw string) {
 	s.mu.Lock()
 	delete(s.sessions, tokenKey(raw))
 	s.mu.Unlock()
+}
+
+func (s *Service) invalidateUserSessions(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, sess := range s.sessions {
+		if sess.User.ID == userID {
+			delete(s.sessions, key)
+		}
+	}
 }
 
 func (s *Service) setCookie(w http.ResponseWriter, token string) {

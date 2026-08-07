@@ -24,6 +24,7 @@ services:
       DRISHTI_HTTP_ADDR: ":8080"
       DRISHTI_DB_URL: "postgres://hypershift:changeme@postgres:5432/hypershift?sslmode=disable"
       DRISHTI_LOG_LEVEL: info
+      # Mock seed, or one-time bootstrap only when real-mode auth_users is empty.
       DRISHTI_AUTH_USERS_FILE: "/run/secrets/drishti-auth-users.json"
       DRISHTI_SESSION_SECURE: "false"
     volumes:

@@ -7,15 +7,20 @@ import (
 
 // fakeMigrator records applied versions in memory.
 type fakeMigrator struct {
-	ensured  bool
-	applied  map[int]bool
-	failOn   int
+	ensured bool
+	applied map[int]bool
+	failOn  int
 }
 
 func newFake() *fakeMigrator { return &fakeMigrator{applied: map[int]bool{}} }
 
-func (f *fakeMigrator) EnsureSchemaMigrations(ctx context.Context) error { f.ensured = true; return nil }
-func (f *fakeMigrator) AppliedVersions(ctx context.Context) (map[int]bool, error) { return f.applied, nil }
+func (f *fakeMigrator) EnsureSchemaMigrations(ctx context.Context) error {
+	f.ensured = true
+	return nil
+}
+func (f *fakeMigrator) AppliedVersions(ctx context.Context) (map[int]bool, error) {
+	return f.applied, nil
+}
 func (f *fakeMigrator) Apply(ctx context.Context, m Migration) error {
 	if f.failOn == m.Version {
 		return errSentinel
@@ -35,8 +40,8 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(all) != 3 {
-		t.Fatalf("migration count = %d, want 3", len(all))
+	if len(all) != 4 {
+		t.Fatalf("migration count = %d, want 4", len(all))
 	}
 	if all[0].Version != 1 {
 		t.Errorf("first version = %d, want 1", all[0].Version)
@@ -49,6 +54,9 @@ func TestLoadEmbeddedMigrations(t *testing.T) {
 	}
 	if all[2].Version != 3 || all[2].Name != "0003_job_actors.sql" {
 		t.Fatalf("third migration = %#v", all[2])
+	}
+	if all[3].Version != 4 || all[3].Name != "0004_auth_users.sql" {
+		t.Fatalf("fourth migration = %#v", all[3])
 	}
 }
 

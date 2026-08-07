@@ -28,6 +28,7 @@ const (
 	ActionCleanup      Action = "cleanup"
 	ActionManageConn   Action = "manage_connections"
 	ActionViewAudit    Action = "view_audit"
+	ActionManageUsers  Action = "manage_users"
 )
 
 // User represents an authenticated operator.
@@ -44,7 +45,7 @@ var permissions = map[Role][]Action{
 	RolePlanner:       {ActionView, ActionCreatePlan, ActionDeletePlan, ActionRunPreflight},
 	RoleOperator:      {ActionView, ActionCreatePlan, ActionRunPreflight, ActionExecute},
 	RoleApprover:      {ActionView, ActionApprove, ActionRollback},
-	RolePlatformAdmin: {ActionView, ActionCreatePlan, ActionDeletePlan, ActionRunPreflight, ActionExecute, ActionApprove, ActionRollback, ActionCleanup, ActionManageConn, ActionViewAudit},
+	RolePlatformAdmin: {ActionView, ActionCreatePlan, ActionDeletePlan, ActionRunPreflight, ActionExecute, ActionApprove, ActionRollback, ActionCleanup, ActionManageConn, ActionViewAudit, ActionManageUsers},
 	RoleAuditor:       {ActionView, ActionViewAudit},
 }
 

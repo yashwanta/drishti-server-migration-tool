@@ -27,6 +27,16 @@ export interface Session {
   csrf_token: string;
 }
 
+export interface ManagedUser {
+  id: string;
+  username: string;
+  name: string;
+  roles: Role[];
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Connection {
   id: string;
   name: string;

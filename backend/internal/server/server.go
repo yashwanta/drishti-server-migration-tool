@@ -71,6 +71,10 @@ func (s *Server) routes() {
 	s.root.HandleFunc("POST /api/v1/auth/login", s.auth.LoginHandler)
 	s.root.Handle("GET /api/v1/auth/session", s.auth.RequireSession(http.HandlerFunc(s.auth.SessionHandler)))
 	s.root.Handle("POST /api/v1/auth/logout", s.auth.RequireSession(http.HandlerFunc(s.auth.LogoutHandler)))
+	s.root.Handle("POST /api/v1/auth/change-password", s.auth.RequireSession(http.HandlerFunc(s.auth.ChangePasswordHandler)))
+	s.router.HandleFunc("GET /api/v1/users", s.auth.ListUsersHandler)
+	s.router.HandleFunc("POST /api/v1/users", s.auth.CreateUserHandler)
+	s.router.HandleFunc("POST /api/v1/users/{id}/deactivate", s.auth.DeactivateUserHandler)
 	s.protectAPI()
 }
 

@@ -234,6 +234,30 @@ body {
   font-size: 14px;
 }
 .field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+.password-input { position: relative; }
+.password-input input { padding-right: 42px; }
+.password-toggle { position: absolute; right: 1px; top: 1px; width: 36px; height: calc(100% - 2px); display: grid; place-items: center; padding: 0; border: 0; border-left: 1px solid var(--border); border-radius: 0 5px 5px 0; color: var(--muted); background: var(--panel-2); cursor: pointer; }
+.password-toggle:hover, .password-toggle:focus-visible { color: var(--text); outline: none; }
+.password-toggle svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.login-panel { width: min(420px, calc(100% - 32px)); margin: 12vh auto 0; }
+.login-panel header { cursor: default; }
+.login-actions { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.link-button { padding: 4px 0; border: 0; color: #9fc1ff; background: transparent; cursor: pointer; }
+.link-button:hover { text-decoration: underline; }
+.link-button:disabled { opacity: .5; cursor: not-allowed; }
+.password-hint { margin-top: -8px; }
+.success-text { color: var(--green); font-size: 12px; margin-top: 8px; }
+.user-create { padding-bottom: 14px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.user-create > strong { display: block; margin-bottom: 10px; font-size: 13px; }
+.role-picker { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 0 0 12px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+.role-picker legend { padding: 0 4px; color: var(--muted); font-size: 12px; }
+.role-picker label { font-size: 11px; overflow-wrap: anywhere; }
+.role-picker input { width: auto; }
+.user-management-error { margin-bottom: 10px; }
+.user-list { display: grid; gap: 7px; }
+.user-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2); }
+.user-row strong { font-size: 12px; }
+.user-row .btn { padding: 4px 7px; font-size: 10px; }
 
 .summary-row {
   display: flex;

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { PlatformKind, ConnRole } from '../types';
 import { api, type CreateConnectionInput } from '../api';
+import { PasswordInput } from './PasswordInput';
 
 interface Props {
   defaultRole: ConnRole;
@@ -153,15 +154,8 @@ export function AddConnectionModal({ defaultRole, onClose, onCreated }: Props) {
                   autoComplete="username"
                 />
               </div>
-              <div className="field">
-                <label>Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Password"
-                  autoComplete="current-password"
-                />
+              <div>
+                <PasswordInput label="Password" value={password} onChange={setPassword} placeholder="Password" autoComplete="current-password" />
                 <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>
                   Kept only in backend memory for this session; never returned, persisted, or logged.
                 </div>
