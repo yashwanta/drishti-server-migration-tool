@@ -11,6 +11,7 @@ VMware to Proxmox. Each article is focused and self-contained.
 - **Concerned about safety?** Read [Safety and Rollback](./04-safety-and-rollback.md).
 - **Running into problems?** Read [Troubleshooting](./05-troubleshooting.md).
 - **Have questions?** Read [FAQ](./06-faq.md).
+- **Evaluating product licensing or updates?** Read [Licensing, Distribution, and Product Updates](./08-licensing-distribution-and-updates.md).
 
 ## Articles
 
@@ -21,6 +22,7 @@ VMware to Proxmox. Each article is focused and self-contained.
 5. [Troubleshooting](./05-troubleshooting.md) - common issues and fixes.
 6. [FAQ](./06-faq.md) - frequently asked questions.
 7. [Migration Lifecycle](./07-migration-lifecycle.md) - the 7-step workflow.
+8. [Licensing, Distribution, and Product Updates](./08-licensing-distribution-and-updates.md) - approved trial/full licensing, packaging, activation, and update policy.
 
 ## Quick reference
 
